@@ -1,0 +1,8 @@
+/*
+ * Legacy main.c backup disabled.
+ *
+ * The active startup flow is Core/Src/main.c:
+ * HAL/CubeMX init -> MX_FREERTOS_Init() -> vTaskStartScheduler().
+ *
+ * WS2812 animation is owned only by Modules/led/led_module.c.
+ */
