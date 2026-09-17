@@ -25,6 +25,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#include "ws2812.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -56,7 +57,20 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+static void Error_Delay(uint32_t ms)
+{
+    // 确保 DWT 计数器已使能
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    
+    uint32_t cycles_per_ms = SystemCoreClock / 1000U;
+    uint32_t start = DWT->CYCCNT;
+    
+    while ((DWT->CYCCNT - start) < (ms * cycles_per_ms))
+    {
+        // 空循环等待，不依赖任何中断
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -195,6 +209,10 @@ void Error_Handler(void)
     __disable_irq();
     while (1)
     {
+      WS2812_Ctrl(255U, 0U, 0U);
+      Error_Delay(100U);   // 亮 100ms
+      WS2812_Ctrl(0U, 0U, 0U);
+      Error_Delay(100U);   // 灭 100ms
     }
   /* USER CODE END Error_Handler_Debug */
 }
