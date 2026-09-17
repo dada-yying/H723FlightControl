@@ -67,7 +67,11 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  /* FreeRTOS obtains the initial MSP through this image's vector table. */
+  extern uint32_t __Vectors;
+  SCB->VTOR = (uint32_t)&__Vectors;
+  __DSB();
+  __ISB();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -89,15 +93,21 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
-
+  App_Main_Init();
   /* USER CODE END 2 */
 
   /* Init scheduler */
-  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  if (osKernelInitialize() != osOK)
+  {
+    Error_Handler();
+  }
   MX_FREERTOS_Init();
 
   /* Start scheduler */
-  osKernelStart();
+  if (osKernelStart() != osOK)
+  {
+    Error_Handler();
+  }
 
   /* We should never get here as control is now taken by the scheduler */
 

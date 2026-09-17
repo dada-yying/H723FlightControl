@@ -13,17 +13,20 @@ This project is a clean STM32H723 + HAL + FreeRTOS starter template.
 
 ## Application Entry
 
-- Add board-level init code in `App_Main_Init()`.
-- Create FreeRTOS tasks, queues, semaphores, timers, and application modules in `App_Main_Start()`.
+- `main()` calls `App_Main_Init()` before scheduler startup to initialize SPI6 and send a red LED frame.
+- `MX_FREERTOS_Init()` calls `App_Main_Start()` to create the WS2812 task.
 - Keep `Core/Src/main.c` focused on HAL initialization and scheduler startup.
 
 ## Current Template Behavior
 
 - Initializes HAL, system clock, GPIO clocks, and FreeRTOS.
 - Starts the FreeRTOS scheduler.
-- No user task is created by default, so only the FreeRTOS idle task runs until new tasks are added.
+- Runs the default task and a WS2812 color task with a 20 ms delay between frames.
+- SysTick advances both the HAL timebase and, after scheduler startup, the FreeRTOS tick.
 
 ## Notes
 
-- FDCAN, SPI, USART, WS2812, motor, LED, and PID demo code has been removed from the Keil build and application entry path.
+- SPI6 and the matching SPI HAL files from the supplied WS2812 example are enabled.
+- FDCAN, USART, motor, and PID demos remain outside the application startup path.
 - If you add a new peripheral in CubeMX or manually, enable the matching `HAL_xxx_MODULE_ENABLED` macro in `Core/Inc/stm32h7xx_hal_conf.h` and add the HAL source file to the Keil project.
+- See `WS2812_CHECK.md` for the checked wiring, diagnostics, rebuild command and regeneration caveats.
