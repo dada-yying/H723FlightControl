@@ -1,0 +1,13 @@
+# Keil MDK build outputs (source, project, scatter and build scripts stay tracked)
+MDK-ARM/**/*.axf
+MDK-ARM/**/*.bak
+MDK-ARM/**/*.crf
+MDK-ARM/**/*.d
+MDK-ARM/**/*.dep
+MDK-ARM/**/*.hex
+MDK-ARM/**/*.htm
+MDK-ARM/**/*.lnp
+MDK-ARM/**/*.log
+MDK-ARM/**/*.lst
+MDK-ARM/**/*.map
+MDK-ARM/**/*.o
