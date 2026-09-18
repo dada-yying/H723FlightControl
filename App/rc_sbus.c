@@ -11,12 +11,21 @@
 #define RC_SBUS_FLAG_CH18 0x02U
 #define RC_SBUS_FLAG_FRAME_LOST 0x04U
 #define RC_SBUS_FLAG_FAILSAFE 0x08U
-#define RC_SBUS_RAW_MIN 172U
-#define RC_SBUS_RAW_CENTER 992U
-#define RC_SBUS_RAW_MAX 1811U
-/* Measured CH3 endpoints for this transmitter; other axes retain their ranges. */
+/* Measured transmitter endpoints and released-stick centers (raw SBUS units). */
+#define RC_SBUS_ROLL_MIN 0x014EU
+#define RC_SBUS_ROLL_CENTER 0x03F0U
+#define RC_SBUS_ROLL_MAX 0x068BU
+#define RC_SBUS_PITCH_MIN 0x0138U
+#define RC_SBUS_PITCH_CENTER 0x03E8U
+#define RC_SBUS_PITCH_MAX 0x0677U
+#define RC_SBUS_YAW_MIN 0x0140U
+#define RC_SBUS_YAW_CENTER 0x03E0U
+#define RC_SBUS_YAW_MAX 0x067FU
 #define RC_SBUS_THROTTLE_MIN 348U
 #define RC_SBUS_THROTTLE_MAX 1696U
+#define RC_SBUS_ROLL_TARGET_SIGN (1.0f)
+#define RC_SBUS_PITCH_TARGET_SIGN (-1.0f)
+#define RC_SBUS_YAW_RATE_TARGET_SIGN (1.0f)
 #define RC_SBUS_DEADBAND 0.03f
 #define RC_SBUS_MAX_TILT_RAD (30.0f * 3.14159265358979323846f / 180.0f)
 #define RC_SBUS_MAX_YAW_RATE_RAD_S (180.0f * 3.14159265358979323846f / 180.0f)
@@ -47,13 +56,6 @@ static void RcSbus_NotifyFromISR(void)
     }
 }
 
-static uint16_t RcSbus_ClampRaw(uint16_t value)
-{
-    if (value < RC_SBUS_RAW_MIN) return RC_SBUS_RAW_MIN;
-    if (value > RC_SBUS_RAW_MAX) return RC_SBUS_RAW_MAX;
-    return value;
-}
-
 static float RcSbus_MapThrottle(uint16_t value)
 {
     if (value <= RC_SBUS_THROTTLE_MIN) return 0.0f;
@@ -62,19 +64,23 @@ static float RcSbus_MapThrottle(uint16_t value)
            (float)(RC_SBUS_THROTTLE_MAX - RC_SBUS_THROTTLE_MIN);
 }
 
-static float RcSbus_MapCentered(uint16_t value)
+static float RcSbus_MapCentered(uint16_t value, uint16_t minimum,
+                               uint16_t center, uint16_t maximum)
 {
     float normalized;
-    float magnitude;
-    value = RcSbus_ClampRaw(value);
-    if (value >= RC_SBUS_RAW_CENTER)
-        normalized = (float)(value - RC_SBUS_RAW_CENTER) / (float)(RC_SBUS_RAW_MAX - RC_SBUS_RAW_CENTER);
+    /* Convert before subtraction so the centered difference is signed.
+     * Normalize each side independently, preserving asymmetric travel. */
+    if (value < minimum) value = minimum;
+    if (value > maximum) value = maximum;
+    if (value >= center)
+        normalized = ((float)value - (float)center) / ((float)maximum - (float)center);
     else
-        normalized = (float)((int32_t)value - (int32_t)RC_SBUS_RAW_CENTER) / (float)(RC_SBUS_RAW_CENTER - RC_SBUS_RAW_MIN);
-    magnitude = (normalized < 0.0f) ? -normalized : normalized;
-    if (magnitude <= RC_SBUS_DEADBAND) return 0.0f;
-    magnitude = (magnitude - RC_SBUS_DEADBAND) / (1.0f - RC_SBUS_DEADBAND);
-    return (normalized < 0.0f) ? -magnitude : magnitude;
+        normalized = ((float)value - (float)center) / ((float)center - (float)minimum);
+    if (normalized > RC_SBUS_DEADBAND)
+        return (normalized - RC_SBUS_DEADBAND) / (1.0f - RC_SBUS_DEADBAND);
+    if (normalized < -RC_SBUS_DEADBAND)
+        return (normalized + RC_SBUS_DEADBAND) / (1.0f - RC_SBUS_DEADBAND);
+    return 0.0f;
 }
 
 static uint16_t RcSbus_UnpackChannel(const uint8_t frame[RC_SBUS_FRAME_SIZE], uint8_t channel_index)
@@ -123,11 +129,19 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
         RcSbus_CheckTimeout();
         return;
     }
-    /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw. */
+    /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw.
+     * Measured right-roll/right-yaw increase raw values; forward-pitch decreases.
+     * Targets are radians (roll/pitch) and radians/second (yaw rate). */
     g_rc_sbus_data.throttle = RcSbus_MapThrottle(g_rc_sbus_data.channel[2]);
-    g_rc_sbus_data.roll_target_rad = RcSbus_MapCentered(g_rc_sbus_data.channel[0]) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.pitch_target_rad = RcSbus_MapCentered(g_rc_sbus_data.channel[1]) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.yaw_rate_target_rad_s = RcSbus_MapCentered(g_rc_sbus_data.channel[3]) * RC_SBUS_MAX_YAW_RATE_RAD_S;
+    g_rc_sbus_data.roll_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
+        RcSbus_MapCentered(g_rc_sbus_data.channel[0], RC_SBUS_ROLL_MIN,
+                          RC_SBUS_ROLL_CENTER, RC_SBUS_ROLL_MAX) * RC_SBUS_MAX_TILT_RAD;
+    g_rc_sbus_data.pitch_target_rad = RC_SBUS_PITCH_TARGET_SIGN *
+        RcSbus_MapCentered(g_rc_sbus_data.channel[1], RC_SBUS_PITCH_MIN,
+                          RC_SBUS_PITCH_CENTER, RC_SBUS_PITCH_MAX) * RC_SBUS_MAX_TILT_RAD;
+    g_rc_sbus_data.yaw_rate_target_rad_s = RC_SBUS_YAW_RATE_TARGET_SIGN *
+        RcSbus_MapCentered(g_rc_sbus_data.channel[3], RC_SBUS_YAW_MIN,
+                          RC_SBUS_YAW_CENTER, RC_SBUS_YAW_MAX) * RC_SBUS_MAX_YAW_RATE_RAD_S;
     g_rc_sbus_data.last_valid_tick = HAL_GetTick();
     g_rc_sbus_data.valid_frame_count++;
     g_rc_sbus_data.valid = 1U;
