@@ -19,7 +19,6 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "rc_sbus.h"
 #include "stm32h7xx_it.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -192,11 +191,7 @@ void DMA1_Stream0_IRQHandler(void)
 
 void UART5_IRQHandler(void)
 {
-#if RC_SBUS_DIAGNOSTIC
-  RcSbus_DiagnosticIRQ();
-#else
   HAL_UART_IRQHandler(&huart5);
-#endif
 }
 
 /* USER CODE BEGIN 1 */

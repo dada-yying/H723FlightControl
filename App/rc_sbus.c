@@ -14,6 +14,9 @@
 #define RC_SBUS_RAW_MIN 172U
 #define RC_SBUS_RAW_CENTER 992U
 #define RC_SBUS_RAW_MAX 1811U
+/* Measured CH3 endpoints for this transmitter; other axes retain their ranges. */
+#define RC_SBUS_THROTTLE_MIN 348U
+#define RC_SBUS_THROTTLE_MAX 1696U
 #define RC_SBUS_DEADBAND 0.03f
 #define RC_SBUS_MAX_TILT_RAD (30.0f * 3.14159265358979323846f / 180.0f)
 #define RC_SBUS_MAX_YAW_RATE_RAD_S (180.0f * 3.14159265358979323846f / 180.0f)
@@ -22,11 +25,6 @@
 #define RC_SBUS_RX_RING_SIZE 128U
 
 volatile RcSbusData_t g_rc_sbus_data;
-volatile RcSbusDebug_t g_rc_sbus_debug;
-volatile RcSbusDiagnostic_t g_rc_sbus_diag;
-#if RC_SBUS_DIAGNOSTIC
-static void RcSbus_DiagnosticPoll(void);
-#endif
 /* Explicit linker placement in DMA1-accessible SRAM; never DTCM. */
 __attribute__((section(".sbus_dma"), aligned(32)))
 static uint8_t s_uart5_dma_buffer[RC_SBUS_DMA_BUFFER_SIZE];
@@ -58,8 +56,10 @@ static uint16_t RcSbus_ClampRaw(uint16_t value)
 
 static float RcSbus_MapThrottle(uint16_t value)
 {
-    const uint16_t clamped = RcSbus_ClampRaw(value);
-    return (float)(clamped - RC_SBUS_RAW_MIN) / (float)(RC_SBUS_RAW_MAX - RC_SBUS_RAW_MIN);
+    if (value <= RC_SBUS_THROTTLE_MIN) return 0.0f;
+    if (value >= RC_SBUS_THROTTLE_MAX) return 1.0f;
+    return (float)(value - RC_SBUS_THROTTLE_MIN) /
+           (float)(RC_SBUS_THROTTLE_MAX - RC_SBUS_THROTTLE_MIN);
 }
 
 static float RcSbus_MapCentered(uint16_t value)
@@ -100,11 +100,6 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
 {
     uint8_t index;
     const uint8_t flags = frame[23];
-#if RC_SBUS_DIAGNOSTIC
-    if (g_rc_sbus_diag.phase < 2U)
-        for (index = 0U; index < RC_SBUS_FRAME_SIZE; index++)
-            g_rc_sbus_diag.capture[g_rc_sbus_diag.phase].last_frame[index] = frame[index];
-#endif
     g_rc_sbus_data.frame_count++;
     for (index = 0U; index < RC_SBUS_CHANNEL_COUNT; index++)
         g_rc_sbus_data.channel[index] = RcSbus_UnpackChannel(frame, index);
@@ -114,17 +109,20 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
     g_rc_sbus_data.failsafe = ((flags & RC_SBUS_FLAG_FAILSAFE) != 0U) ? 1U : 0U;
     if (g_rc_sbus_data.frame_lost != 0U) g_rc_sbus_data.frame_lost_count++;
     if (g_rc_sbus_data.failsafe != 0U) g_rc_sbus_data.failsafe_count++;
-    if ((g_rc_sbus_data.frame_lost != 0U) || (g_rc_sbus_data.failsafe != 0U))
+    /* Receiver failsafe takes precedence, including when both flags are set. */
+    if (g_rc_sbus_data.failsafe != 0U)
     {
         RcSbus_PublishSafe();
         return;
     }
-#if RC_SBUS_DIAGNOSTIC
-    /* Capture/parse only: never publish usable control targets in this build. */
-    g_rc_sbus_data.valid_frame_count++;
-    RcSbus_PublishSafe();
-    return;
-#endif
+    if (g_rc_sbus_data.frame_lost != 0U)
+    {
+        /* Keep the last GOOD targets only within the existing 100 ms window.
+         * Never refresh last_valid_tick or valid_frame_count on a lost frame.
+         * Raw channels above remain available for diagnostics, not control. */
+        RcSbus_CheckTimeout();
+        return;
+    }
     /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw. */
     g_rc_sbus_data.throttle = RcSbus_MapThrottle(g_rc_sbus_data.channel[2]);
     g_rc_sbus_data.roll_target_rad = RcSbus_MapCentered(g_rc_sbus_data.channel[0]) * RC_SBUS_MAX_TILT_RAD;
@@ -167,14 +165,11 @@ static HAL_StatusTypeDef RcSbus_ArmUart5Reception(void)
 {
     HAL_StatusTypeDef status;
     SCB_CleanInvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
-    g_rc_sbus_debug.start_count++;
     status = HAL_UARTEx_ReceiveToIdle_DMA(&huart5, s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
-    g_rc_sbus_debug.last_start_status = (uint32_t)status;
     if (status == HAL_OK)
         __HAL_DMA_DISABLE_IT(huart5.hdmarx, DMA_IT_HT);
     else
     {
-        g_rc_sbus_debug.start_fail_count++;
         s_restart_pending = 1U;
     }
     return status;
@@ -183,11 +178,6 @@ static HAL_StatusTypeDef RcSbus_ArmUart5Reception(void)
 void RcSbus_Init(void)
 {
     (void)memset((void *)&g_rc_sbus_data, 0, sizeof(g_rc_sbus_data));
-    (void)memset((void *)&g_rc_sbus_debug, 0, sizeof(g_rc_sbus_debug));
-    g_rc_sbus_debug.version = RC_SBUS_DIAGNOSTIC ? 0x00030001U : 0x00020002U;
-    (void)memset((void *)&g_rc_sbus_diag, 0, sizeof(g_rc_sbus_diag));
-    g_rc_sbus_diag.phase = 3U;
-    g_rc_sbus_debug.dma_address = (uint32_t)s_uart5_dma_buffer;
     (void)memset(s_rx_ring, 0, sizeof(s_rx_ring));
     s_rx_head = 0U;
     s_rx_tail = 0U;
@@ -210,11 +200,6 @@ void RcSbus_SetTaskHandle(TaskHandle_t task_handle) { s_rc_task_handle = task_ha
 void RcSbus_ProcessPending(void)
 {
     uint16_t tail;
-    g_rc_sbus_debug.task_count++;
-#if RC_SBUS_DIAGNOSTIC
-    RcSbus_DiagnosticPoll();
-    return;
-#endif
     if (s_restart_pending != 0U)
     {
         /* Blocking HAL abort is TASK ONLY. Never restart/abort recursively in ISR. */
@@ -226,7 +211,6 @@ void RcSbus_ProcessPending(void)
         s_rx_tail = s_rx_head;
         s_frame_index = 0U;
         s_restart_pending = 0U;
-        g_rc_sbus_debug.restart_count++;
         (void)RcSbus_ArmUart5Reception();
         return; /* retry on next task timeout if start failed */
     }
@@ -287,18 +271,12 @@ void RcSbus_RxBytesFromISR(const uint8_t *data, uint16_t length)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
-    uint16_t i;
     if (huart != &huart5) return;
     if (s_restart_pending != 0U) return;
-    g_rc_sbus_debug.rx_event_count++;
     if (size > RC_SBUS_DMA_BUFFER_SIZE) size = RC_SBUS_DMA_BUFFER_SIZE;
-    g_rc_sbus_debug.last_rx_size = size;
-    g_rc_sbus_debug.rx_byte_count += size;
     if (size != 0U)
     {
         SCB_InvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
-        for (i = 0U; (i < size) && (i < sizeof(g_rc_sbus_debug.last_rx)); i++)
-            g_rc_sbus_debug.last_rx[i] = s_uart5_dma_buffer[i];
         RcSbus_RxBytesFromISR(s_uart5_dma_buffer, size);
     }
     (void)RcSbus_ArmUart5Reception();
@@ -307,104 +285,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart != &huart5) return;
-    /* HAL has aborted DMA by this point. Preserve the error before recovery. */
-    g_rc_sbus_debug.uart_error_count++;
-    g_rc_sbus_debug.last_uart_error = huart->ErrorCode;
-    g_rc_sbus_debug.last_dma_error = huart->hdmarx->ErrorCode;
+    /* HAL has aborted DMA. Request recovery in task context. */
     s_restart_pending = 1U;
     RcSbus_NotifyFromISR();
 }
-
-/* Temporary raw interrupt receiver. No HAL RX/DMA restart, parsing or UART TX in ISR. */
-void RcSbus_DiagnosticIRQ(void)
-{
-    uint32_t status = UART5->ISR;
-    uint32_t errors = status & (USART_ISR_PE | USART_ISR_FE | USART_ISR_NE | USART_ISR_ORE);
-    uint32_t phase = g_rc_sbus_diag.phase;
-    if ((status & USART_ISR_RXNE_RXFNE) != 0U)
-    {
-        uint8_t byte = (uint8_t)UART5->RDR;
-        if (phase < 2U)
-        {
-            volatile RcSbusCapture_t *capture = &g_rc_sbus_diag.capture[phase];
-            uint32_t index = capture->byte_count % RC_SBUS_CAPTURE_SIZE;
-            capture->bytes[index] = byte;
-            capture->errors[index] = (uint8_t)errors;
-            if ((errors == 0U) && (byte == RC_SBUS_FRAME_HEADER)) capture->clean_header_count++;
-            __DMB();
-            capture->byte_count++;
-            g_rc_sbus_debug.rx_byte_count++;
-        }
-    }
-    if (errors != 0U)
-    {
-        UART5->ICR = UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF | UART_CLEAR_OREF;
-        if (phase < 2U) g_rc_sbus_diag.capture[phase].error_count++;
-    }
-}
-
-#if RC_SBUS_DIAGNOSTIC
-static void RcSbus_DiagnosticPoll(void)
-{
-    static uint32_t started;
-    static uint32_t consumed;
-    uint32_t phase = g_rc_sbus_diag.phase;
-    uint32_t now = HAL_GetTick();
-    RcSbus_PublishSafe();
-    if ((phase == 3U) || ((phase < 2U) && ((now - started) >= 5000U)))
-    {
-        /* Stop the receiver before changing polarity. Drop startup residual data/errors. */
-        HAL_NVIC_DisableIRQ(UART5_IRQn);
-        (void)HAL_UART_AbortReceive(&huart5);
-        CLEAR_BIT(UART5->CR1, USART_CR1_UE);
-        phase = (phase == 3U) ? 0U : phase + 1U;
-        g_rc_sbus_diag.phase = phase;
-        s_frame_index = 0U;
-        consumed = 0U;
-        if (phase == 2U) return; /* Freeze both captures until reset. */
-        MODIFY_REG(UART5->CR2, USART_CR2_RXINV, (phase == 0U) ? USART_CR2_RXINV : 0U);
-        CLEAR_BIT(UART5->CR3, USART_CR3_DMAR);
-        UART5->ICR = UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF | UART_CLEAR_OREF | UART_CLEAR_IDLEF;
-        UART5->RQR = UART_RXDATA_FLUSH_REQUEST;
-        SET_BIT(UART5->CR1, USART_CR1_RE | USART_CR1_UE | USART_CR1_RXNEIE_RXFNEIE | USART_CR1_PEIE);
-        SET_BIT(UART5->CR3, USART_CR3_EIE);
-        g_rc_sbus_diag.kernel_clock_hz = HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_UART5);
-        g_rc_sbus_diag.capture[phase].cr1 = UART5->CR1;
-        g_rc_sbus_diag.capture[phase].cr2 = UART5->CR2;
-        g_rc_sbus_diag.capture[phase].brr = UART5->BRR;
-        started = now;
-        HAL_NVIC_ClearPendingIRQ(UART5_IRQn);
-        HAL_NVIC_EnableIRQ(UART5_IRQn);
-    }
-    if (phase < 2U)
-    {
-        volatile RcSbusCapture_t *capture = &g_rc_sbus_diag.capture[phase];
-        uint32_t budget = RC_SBUS_CAPTURE_SIZE;
-        while (budget-- != 0U)
-        {
-            uint8_t byte, errors;
-            uint32_t frames;
-            taskENTER_CRITICAL();
-            if ((capture->byte_count - consumed) > RC_SBUS_CAPTURE_SIZE)
-            {
-                capture->overrun_count++;
-                consumed = capture->byte_count - RC_SBUS_CAPTURE_SIZE;
-                s_frame_index = 0U;
-            }
-            if (consumed == capture->byte_count)
-            {
-                taskEXIT_CRITICAL();
-                break;
-            }
-            byte = capture->bytes[consumed % RC_SBUS_CAPTURE_SIZE];
-            errors = capture->errors[consumed % RC_SBUS_CAPTURE_SIZE];
-            consumed++;
-            taskEXIT_CRITICAL();
-            if (errors != 0U) { s_frame_index = 0U; continue; }
-            frames = g_rc_sbus_data.frame_count;
-            RcSbus_ConsumeByte(byte);
-            capture->frame_count += g_rc_sbus_data.frame_count - frames;
-        }
-    }
-}
-#endif
