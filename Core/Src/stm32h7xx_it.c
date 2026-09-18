@@ -19,12 +19,14 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "rc_sbus.h"
 #include "stm32h7xx_it.h"
 #include "FreeRTOS.h"
 #include "task.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "fdcan.h"
+#include "usart.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -181,6 +183,20 @@ void SysTick_Handler(void)
 void FDCAN3_IT0_IRQHandler(void)
 {
   HAL_FDCAN_IRQHandler(&hfdcan3);
+}
+
+void DMA1_Stream0_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_uart5_rx);
+}
+
+void UART5_IRQHandler(void)
+{
+#if RC_SBUS_DIAGNOSTIC
+  RcSbus_DiagnosticIRQ();
+#else
+  HAL_UART_IRQHandler(&huart5);
+#endif
 }
 
 /* USER CODE BEGIN 1 */

@@ -362,7 +362,7 @@
             </VariousControls>
           </Aads>
           <LDads>
-            <umfTarg>1</umfTarg>
+            <umfTarg>0</umfTarg>
             <Ropi>0</Ropi>
             <Rwpi>0</Rwpi>
             <noStLib>0</noStLib>
@@ -371,7 +371,7 @@
             <TextAddressRange></TextAddressRange>
             <DataAddressRange></DataAddressRange>
             <pXoBase></pXoBase>
-            <ScatterFile></ScatterFile>
+            <ScatterFile>sbus_memory.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
             <Misc></Misc>
@@ -583,6 +583,11 @@
               <FileName>vofa.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/vofa.c</FilePath>
+            </File>
+            <File>
+              <FileName>rc_sbus.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/rc_sbus.c</FilePath>
             </File>
           </Files>
         </Group>

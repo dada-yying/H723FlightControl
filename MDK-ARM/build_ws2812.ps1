@@ -1,8 +1,9 @@
+param([string]$OutputDirectory = 'ws2812-hal-verified')
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
     $bin = 'D:\keil5\ARM\ARMCC\Bin'
-    $outDir = 'ws2812-hal-verified'
+    $outDir = $OutputDirectory
     New-Item -ItemType Directory -Path $outDir -Force | Out-Null
     Start-Transcript -Path "$outDir/build.log" -Force | Out-Null
     try {
@@ -23,7 +24,9 @@ try {
             if ($LASTEXITCODE -ne 0) { throw "Compile failed: $src" }
             $objects += $obj
         }
-        & "$bin/armlink.exe" --cpu Cortex-M7.fp.dp @objects --scatter 'CtrlBoard-H7/CtrlBoard-H7.sct' --strict --map --symbols --xref --callgraph --list "$outDir/firmware.map" -o "$outDir/firmware.axf"
+        $scatter = [string]$project.Project.Targets.Target.TargetOption.TargetArmAds.LDads.ScatterFile
+        if ([string]::IsNullOrWhiteSpace($scatter)) { $scatter = 'CtrlBoard-H7/CtrlBoard-H7.sct' }
+        & "$bin/armlink.exe" --cpu Cortex-M7.fp.dp @objects --scatter $scatter --strict --map --symbols --xref --callgraph --list "$outDir/firmware.map" -o "$outDir/firmware.axf"
         if ($LASTEXITCODE -ne 0) { throw 'Link failed' }
         & "$bin/fromelf.exe" --i32combined --output "$outDir/firmware.hex" "$outDir/firmware.axf"
         if ($LASTEXITCODE -ne 0) { throw 'HEX generation failed' }

@@ -20,6 +20,7 @@
 #include "atom_imu.h"
 #include "vofa.h"
 #include "fdcan.h"
+#include "rc_sbus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,12 +50,20 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 
+osThreadId_t rcTaskHandle;
+const osThreadAttr_t rcTask_attributes = {
+  .name = "RcTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
+};
+
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
+void StartRcTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -87,12 +96,18 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  rcTaskHandle = osThreadNew(StartRcTask, NULL, &rcTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   if (defaultTaskHandle == NULL)
   {
     Error_Handler();
   }
+  if (rcTaskHandle == NULL)
+  {
+    Error_Handler();
+  }
+  RcSbus_SetTaskHandle((TaskHandle_t)rcTaskHandle);
   App_Main_Start();
   /* USER CODE END RTOS_THREADS */
 
@@ -113,6 +128,7 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
   AtomImuData_t imu_data;
+  RcSbusData_t rc_data;
   TickType_t last_wake_time = xTaskGetTickCount();
   const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
 
@@ -121,19 +137,30 @@ void StartDefaultTask(void *argument)
   {
     FDCAN3_UpdateDiagnostics();
     AtomImu_GetData(&imu_data);
-    if (imu_data.euler_valid != 0U)
-    {
-      /*
-       * AtomImuData_t retains the sensor's native axes. Any future
-       * airframe-to-display coordinate conversion belongs above this layer.
-       */
-      (void)VOFA_SendAttitude(imu_data.roll * (180.0f / 3.14159265358979323846f),
-                              imu_data.pitch * (180.0f / 3.14159265358979323846f),
-                              imu_data.yaw * (180.0f / 3.14159265358979323846f));
-    }
+    RcSbus_GetData(&rc_data);
+    /* IMU axes stay native; any airframe coordinate conversion belongs above this layer. */
+    (void)VOFA_SendFlightTelemetry(
+        imu_data.roll * (180.0f / 3.14159265358979323846f),
+        imu_data.pitch * (180.0f / 3.14159265358979323846f),
+        imu_data.yaw * (180.0f / 3.14159265358979323846f),
+        rc_data.throttle,
+        rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
+        rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),
+        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f));
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */
+}
+
+void StartRcTask(void *argument)
+{
+  (void)argument;
+  for (;;)
+  {
+    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
+    RcSbus_ProcessPending();
+    RcSbus_CheckTimeout();
+  }
 }
 
 /* Private application code --------------------------------------------------*/
