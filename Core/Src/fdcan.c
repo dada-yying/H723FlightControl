@@ -10,6 +10,7 @@
 
 /* USER CODE BEGIN 0 */
 #include "atom_imu.h"
+#include "flight_control.h"
 
 #define FDCAN3_EXPECTED_KERNEL_HZ 24000000UL
 #define FDCAN3_TARGET_BITRATE     1000000UL
@@ -192,6 +193,10 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
          (rx_header.Identifier == ATOM_IMU_EULR_CAN_ID)))
     {
       AtomImu_ProcessCanFrame(rx_header.Identifier, data);
+      if (rx_header.Identifier == ATOM_IMU_GYRO_CAN_ID)
+      {
+        FlightControl_NotifyFromISR();
+      }
     }
     else
     {

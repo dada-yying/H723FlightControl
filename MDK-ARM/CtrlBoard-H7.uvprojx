@@ -595,6 +595,11 @@
               <FilePath>../App/rc_sbus.c</FilePath>
             </File>
             <File>
+              <FileName>flight_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/flight_control.c</FilePath>
+            </File>
+            <File>
               <FileName>esc_pwm.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/esc_pwm.c</FilePath>

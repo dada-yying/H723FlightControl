@@ -60,7 +60,7 @@ static void EscPwm_ApplyMotor(EscPwmMotor_t motor, float command)
     g_esc_pwm_state.pulse_us[(uint32_t)motor] = pulse_us;
 }
 
-static void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason, uint8_t clear_middle_seen)
+static void EscPwm_ForceMinimumInternal(EscPwmInhibitReason_t reason, uint8_t clear_middle_seen)
 {
     uint32_t motor;
     for (motor = 0U; motor < ESC_PWM_MOTOR_COUNT; motor++)
@@ -82,7 +82,7 @@ HAL_StatusTypeDef EscPwm_Init(void)
     (void)memset((void *)&g_esc_pwm_state, 0, sizeof(g_esc_pwm_state));
     g_esc_pwm_state.startup_tick = HAL_GetTick();
     g_esc_pwm_state.inhibit_reason = (uint8_t)ESC_PWM_INHIBIT_STARTUP;
-    EscPwm_ForceMinimum(ESC_PWM_INHIBIT_STARTUP, 1U);
+    EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_STARTUP, 1U);
 
     if (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1) != HAL_OK) status = HAL_ERROR;
     if ((status == HAL_OK) && (HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3) != HAL_OK)) status = HAL_ERROR;
@@ -95,7 +95,7 @@ HAL_StatusTypeDef EscPwm_Init(void)
         (void)HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_3);
         (void)HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_1);
         (void)HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_INIT_ERROR, 1U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_INIT_ERROR, 1U);
         return HAL_ERROR;
     }
 
@@ -122,7 +122,7 @@ void EscPwm_SetAllNormalized(float command)
     uint32_t motor;
     if ((g_esc_pwm_state.initialized == 0U) || (g_esc_pwm_state.armed == 0U))
     {
-        EscPwm_ForceMinimum((g_esc_pwm_state.initialized != 0U) ?
+        EscPwm_ForceMinimumInternal((g_esc_pwm_state.initialized != 0U) ?
                            (EscPwmInhibitReason_t)g_esc_pwm_state.inhibit_reason :
                            ESC_PWM_INHIBIT_NOT_INITIALIZED,
                            0U);
@@ -133,9 +133,32 @@ void EscPwm_SetAllNormalized(float command)
     g_esc_pwm_state.update_count++;
 }
 
+void EscPwm_SetMixedNormalized(const float motor_command[ESC_PWM_MOTOR_COUNT])
+{
+    uint32_t motor;
+    if ((motor_command == NULL) || (g_esc_pwm_state.initialized == 0U) ||
+        (g_esc_pwm_state.armed == 0U))
+    {
+        return;
+    }
+    for (motor = 0U; motor < ESC_PWM_MOTOR_COUNT; motor++)
+        EscPwm_ApplyMotor((EscPwmMotor_t)motor, motor_command[motor]);
+    g_esc_pwm_state.update_count++;
+}
+
+void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason)
+{
+    EscPwm_ForceMinimumInternal(reason, 1U);
+}
+
+uint8_t EscPwm_IsArmed(void)
+{
+    return g_esc_pwm_state.armed;
+}
+
 void EscPwm_Disarm(void)
 {
-    EscPwm_ForceMinimum(ESC_PWM_INHIBIT_SWITCH_LOCKED, 1U);
+    EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_SWITCH_LOCKED, 1U);
 }
 
 void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
@@ -146,12 +169,12 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
 
     if (g_esc_pwm_state.initialized == 0U)
     {
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_NOT_INITIALIZED, 1U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_NOT_INITIALIZED, 1U);
         return;
     }
     if (rc_data == NULL)
     {
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_RC_INVALID, 1U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_RC_INVALID, 1U);
         return;
     }
 
@@ -162,12 +185,12 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
 
     if (rc_data->failsafe != 0U)
     {
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_FAILSAFE, 1U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_FAILSAFE, 1U);
         return;
     }
     if ((rc_data->valid == 0U) || (valid_age >= ESC_PWM_RC_TIMEOUT_MS))
     {
-        EscPwm_ForceMinimum((rc_data->last_valid_tick != 0U) ?
+        EscPwm_ForceMinimumInternal((rc_data->last_valid_tick != 0U) ?
                            ESC_PWM_INHIBIT_RC_TIMEOUT : ESC_PWM_INHIBIT_RC_INVALID,
                            1U);
         return;
@@ -182,7 +205,7 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
     {
         /* CH7 low remains locked, but it does not satisfy the arm precondition. */
         g_esc_pwm_state.arm_middle_seen = 0U;
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_SWITCH_LOCKED, 0U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_SWITCH_LOCKED, 0U);
         return;
     }
 
@@ -193,13 +216,13 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
             g_esc_pwm_state.arm_middle_seen = 1U;
         else
             g_esc_pwm_state.arm_middle_seen = 0U;
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_SWITCH_LOCKED, 0U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_SWITCH_LOCKED, 0U);
         return;
     }
 
     if ((now - g_esc_pwm_state.startup_tick) < ESC_PWM_STARTUP_DELAY_MS)
     {
-        EscPwm_ForceMinimum(ESC_PWM_INHIBIT_STARTUP, 0U);
+        EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_STARTUP, 0U);
         return;
     }
 
@@ -208,7 +231,7 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
         if ((g_esc_pwm_state.arm_middle_seen == 0U) ||
             (rc_data->throttle > ESC_PWM_ARM_MAX_THROTTLE))
         {
-            EscPwm_ForceMinimum(ESC_PWM_INHIBIT_THROTTLE_HIGH, 0U);
+            EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_THROTTLE_HIGH, 0U);
             return;
         }
         g_esc_pwm_state.armed = 1U;
@@ -217,7 +240,7 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
         g_esc_pwm_state.inhibit_reason = (uint8_t)ESC_PWM_INHIBIT_NONE;
     }
 
-    EscPwm_SetAllNormalized(rc_data->throttle);
+    /* FlightControlTask owns motor output after arming. */
 }
 
 void EscPwm_GetState(EscPwmState_t *state)

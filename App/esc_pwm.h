@@ -31,6 +31,7 @@ typedef enum
     ESC_PWM_INHIBIT_RC_INVALID,
     ESC_PWM_INHIBIT_FAILSAFE,
     ESC_PWM_INHIBIT_RC_TIMEOUT,
+    ESC_PWM_INHIBIT_IMU_TIMEOUT,
     ESC_PWM_INHIBIT_NOT_INITIALIZED,
     ESC_PWM_INHIBIT_INIT_ERROR
 } EscPwmInhibitReason_t;
@@ -53,8 +54,11 @@ extern volatile EscPwmState_t g_esc_pwm_state;
 HAL_StatusTypeDef EscPwm_Init(void);
 void EscPwm_SetMotorNormalized(EscPwmMotor_t motor, float command);
 void EscPwm_SetAllNormalized(float command);
+void EscPwm_SetMixedNormalized(const float motor_command[ESC_PWM_MOTOR_COUNT]);
 void EscPwm_Disarm(void);
+void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason);
 void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data);
+uint8_t EscPwm_IsArmed(void);
 void EscPwm_GetState(EscPwmState_t *state);
 
 #ifdef __cplusplus

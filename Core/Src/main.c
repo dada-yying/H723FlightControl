@@ -28,6 +28,7 @@
 #include "app_main.h"
 #include "atom_imu.h"
 #include "esc_pwm.h"
+#include "flight_control.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
 #include "usart.h"
@@ -121,6 +122,7 @@ int main(void)
   App_Main_Init();
   AtomImu_Init();
   RcSbus_Init();
+  FlightControl_Init();
   if (EscPwm_Init() != HAL_OK)
   {
     Error_Handler();

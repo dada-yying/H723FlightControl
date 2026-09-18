@@ -19,6 +19,7 @@
 #include "app_main.h"
 #include "atom_imu.h"
 #include "esc_pwm.h"
+#include "flight_control.h"
 #include "vofa.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
@@ -58,6 +59,13 @@ const osThreadAttr_t rcTask_attributes = {
   .priority = (osPriority_t) osPriorityAboveNormal,
 };
 
+osThreadId_t flightControlTaskHandle;
+const osThreadAttr_t flightControlTask_attributes = {
+  .name = "FlightControlTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
@@ -65,6 +73,7 @@ const osThreadAttr_t rcTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void StartRcTask(void *argument);
+void StartFlightControlTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -98,6 +107,7 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
   rcTaskHandle = osThreadNew(StartRcTask, NULL, &rcTask_attributes);
+  flightControlTaskHandle = osThreadNew(StartFlightControlTask, NULL, &flightControlTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   if (defaultTaskHandle == NULL)
@@ -108,7 +118,12 @@ void MX_FREERTOS_Init(void) {
   {
     Error_Handler();
   }
+  if (flightControlTaskHandle == NULL)
+  {
+    Error_Handler();
+  }
   RcSbus_SetTaskHandle((TaskHandle_t)rcTaskHandle);
+  FlightControl_SetTaskHandle((TaskHandle_t)flightControlTaskHandle);
   App_Main_Start();
   /* USER CODE END RTOS_THREADS */
 
@@ -175,6 +190,36 @@ void StartRcTask(void *argument)
     EscPwm_UpdateFromRc(&rc_data);
   }
   /* USER CODE END StartRcTask */
+}
+
+/* USER CODE BEGIN Header_StartFlightControlTask */
+/**
+  * @brief  Function implementing the FlightControlTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartFlightControlTask */
+void StartFlightControlTask(void *argument)
+{
+  uint32_t pending_gyro_frames = 0U;
+  uint32_t received;
+
+  (void)argument;
+  for (;;)
+  {
+    received = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5U));
+    if (received == 0U)
+    {
+      FlightControl_OnTaskTimeout();
+      continue;
+    }
+    pending_gyro_frames += received;
+    if (pending_gyro_frames >= 2U)
+    {
+      pending_gyro_frames = 0U;
+      FlightControl_Run();
+    }
+  }
 }
 
 /* Private application code --------------------------------------------------*/
