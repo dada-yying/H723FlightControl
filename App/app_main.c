@@ -14,7 +14,7 @@ volatile uint32_t ws2812_task_started = 0U;
 
 static void WS2812_ColorTask(void *argument)
 {
-    uint8_t red = 64U;
+    uint8_t red = 255U;
     uint8_t green = 0U;
     uint8_t blue = 0U;
 
@@ -28,9 +28,21 @@ static void WS2812_ColorTask(void *argument)
         {
             ws2812_frame_count++;
         }
-        red += 1U;
-        green += 5U;
-        blue += 10U;
+        if (red <= 255U && red != 0U && green <= 255U && blue == 0U)
+        {
+            green += 5;
+            red -= 5;
+        }
+        else if (green <= 255U && green != 0U && blue <= 255U && red == 0U)
+        {
+            green -= 5;
+            blue += 5;
+        }
+        else if (blue <= 255U && blue != 0U && red <= 255U && green == 0U)
+        {
+            blue -= 5;
+            red += 5;
+        }
         osDelay(WS2812_TASK_PERIOD_MS);
     }
 }

@@ -17,6 +17,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#include "atom_imu.h"
+#include "vofa.h"
+#include "fdcan.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -109,9 +112,26 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
+  AtomImuData_t imu_data;
+  TickType_t last_wake_time = xTaskGetTickCount();
+  const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
+
+  (void)argument;
   for (;;)
   {
-    osDelay(1);
+    FDCAN3_UpdateDiagnostics();
+    AtomImu_GetData(&imu_data);
+    if (imu_data.euler_valid != 0U)
+    {
+      /*
+       * AtomImuData_t retains the sensor's native axes. Any future
+       * airframe-to-display coordinate conversion belongs above this layer.
+       */
+      (void)VOFA_SendAttitude(imu_data.roll * (180.0f / 3.14159265358979323846f),
+                              imu_data.pitch * (180.0f / 3.14159265358979323846f),
+                              imu_data.yaw * (180.0f / 3.14159265358979323846f));
+    }
+    vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */
 }

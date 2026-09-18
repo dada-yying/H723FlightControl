@@ -59,7 +59,9 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 
 /* USER CODE BEGIN Private defines */
-
+#define POWER_5V_EN_Pin GPIO_PIN_15
+#define POWER_5V_EN_GPIO_Port GPIOC
+ 
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

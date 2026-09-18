@@ -25,6 +25,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
+#include "atom_imu.h"
+#include "fdcan.h"
+#include "usart.h"
 #include "ws2812.h"
 /* USER CODE END Includes */
 
@@ -106,8 +109,15 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_FDCAN3_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   App_Main_Init();
+  AtomImu_Init();
+  if (FDCAN3_StartAtomImuReception() != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE END 2 */
 
   /* Init scheduler */

@@ -32,15 +32,40 @@ extern "C" {
 
 /* USER CODE END Includes */
 
-extern FDCAN_HandleTypeDef hfdcan1;
+extern FDCAN_HandleTypeDef hfdcan3;
 
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
 
-void MX_FDCAN1_Init(void);
+void MX_FDCAN3_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+/* Keil Watch: expand g_fdcan3_debug. Updated by startup, ISR and defaultTask. */
+typedef struct
+{
+  uint32_t kernel_clock_hz;
+  uint32_t nominal_bitrate;
+  uint32_t init_ok;
+  uint32_t start_ok;
+  uint32_t hal_error;
+  uint32_t task_poll_count;
+  uint32_t rx_callback_count;
+  uint32_t rx_frame_count;
+  uint32_t rejected_frame_count;
+  uint32_t last_id;
+  uint32_t last_dlc;
+  uint32_t rx_error_count;
+  uint32_t tx_error_count;
+  uint32_t last_protocol_error; /* Latched LEC 1..6; 0=no error seen. */
+  uint32_t bus_off;
+  uint32_t cccr;
+  uint32_t nbtp;
+} FDCAN3_Debug_t;
+
+extern volatile FDCAN3_Debug_t g_fdcan3_debug;
+HAL_StatusTypeDef FDCAN3_StartAtomImuReception(void);
+void FDCAN3_UpdateDiagnostics(void); /* Call only from the existing task. */
 
 /* USER CODE END Prototypes */
 
