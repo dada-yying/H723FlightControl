@@ -21,11 +21,13 @@
 #include "FreeRTOS.h"
 #include "cmsis_os2.h"
 #include "gpio.h"
+#include "tim.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
 #include "atom_imu.h"
+#include "esc_pwm.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
 #include "usart.h"
@@ -113,10 +115,16 @@ int main(void)
   MX_FDCAN3_Init();
   MX_USART1_UART_Init();
   MX_UART5_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   App_Main_Init();
   AtomImu_Init();
   RcSbus_Init();
+  if (EscPwm_Init() != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (FDCAN3_StartAtomImuReception() != HAL_OK)
   {
     Error_Handler();

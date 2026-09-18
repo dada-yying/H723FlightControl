@@ -405,6 +405,11 @@
               <FilePath>../Core/Src/gpio.c</FilePath>
             </File>
             <File>
+              <FileName>tim.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Core/Src/tim.c</FilePath>
+            </File>
+            <File>
               <FileName>spi.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/spi.c</FilePath>
@@ -588,6 +593,11 @@
               <FileName>rc_sbus.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/rc_sbus.c</FilePath>
+            </File>
+            <File>
+              <FileName>esc_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/esc_pwm.c</FilePath>
             </File>
           </Files>
         </Group>

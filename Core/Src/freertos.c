@@ -18,6 +18,7 @@
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
 #include "atom_imu.h"
+#include "esc_pwm.h"
 #include "vofa.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
@@ -152,15 +153,28 @@ void StartDefaultTask(void *argument)
   /* USER CODE END StartDefaultTask */
 }
 
+/* USER CODE BEGIN Header_StartRcTask */
+/**
+  * @brief  Function implementing the RcTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartRcTask */
 void StartRcTask(void *argument)
 {
+  /* USER CODE BEGIN StartRcTask */
+  RcSbusData_t rc_data;
+
   (void)argument;
   for (;;)
   {
     (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
     RcSbus_ProcessPending();
     RcSbus_CheckTimeout();
+    RcSbus_GetData(&rc_data);
+    EscPwm_UpdateFromRc(&rc_data);
   }
+  /* USER CODE END StartRcTask */
 }
 
 /* Private application code --------------------------------------------------*/
