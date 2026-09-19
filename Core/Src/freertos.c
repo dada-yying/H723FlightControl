@@ -139,7 +139,6 @@ void MX_FREERTOS_Init(void) {
   }
   RcSbus_SetTaskHandle((TaskHandle_t)rcTaskHandle);
   FlightControl_SetTaskHandle((TaskHandle_t)flightControlTaskHandle);
-  App_Main_Start();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

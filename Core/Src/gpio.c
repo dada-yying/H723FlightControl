@@ -23,6 +23,8 @@
 
 /* USER CODE BEGIN 0 */
 
+#define POWER_5V_SETTLE_MS 1000U
+
 /* USER CODE END 0 */
 
 /*----------------------------------------------------------------------------*/
@@ -59,6 +61,10 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(POWER_5V_EN_GPIO_Port, &GPIO_InitStruct);
+
+  /* Let the switched 5 V rail and its external loads settle before other
+     peripherals are initialized and the FreeRTOS scheduler is started. */
+  HAL_Delay(POWER_5V_SETTLE_MS);
 }
 
 /* USER CODE BEGIN 2 */
