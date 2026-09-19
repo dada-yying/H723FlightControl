@@ -46,6 +46,22 @@
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 
+/* Keil Watch: first fault only, reset to zero on the next boot.
+ * handler_msp is sampled inside the C handler, not the exception-entry MSP.
+ * Do not dereference the fault stack here: it may itself be invalid. */
+volatile struct
+{
+  uint32_t exception_number;
+  uint32_t cfsr;
+  uint32_t hfsr;
+  uint32_t abfsr;
+  uint32_t bfar;
+  uint32_t mmfar;
+  uint32_t ccr;
+  uint32_t psp;
+  uint32_t handler_msp;
+} g_fault_snapshot;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -55,6 +71,24 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static void Fault_SaveSnapshot(void)
+{
+  /* Fault context must not call FreeRTOS, SPI/UART, or HAL timeout loops. */
+  __disable_irq();
+  if (g_fault_snapshot.exception_number == 0U)
+  {
+    g_fault_snapshot.cfsr = SCB->CFSR;
+    g_fault_snapshot.hfsr = SCB->HFSR;
+    g_fault_snapshot.abfsr = SCB->ABFSR;
+    g_fault_snapshot.bfar = SCB->BFAR;
+    g_fault_snapshot.mmfar = SCB->MMFAR;
+    g_fault_snapshot.ccr = SCB->CCR;
+    g_fault_snapshot.psp = __get_PSP();
+    g_fault_snapshot.handler_msp = __get_MSP();
+    g_fault_snapshot.exception_number = __get_IPSR();
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -88,6 +122,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
+  Fault_SaveSnapshot();
 
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
@@ -118,7 +153,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  Fault_SaveSnapshot();
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {

@@ -178,7 +178,16 @@ static void RcSbus_ConsumeByte(uint8_t byte)
 static HAL_StatusTypeDef RcSbus_ArmUart5Reception(void)
 {
     HAL_StatusTypeDef status;
-    SCB_CleanInvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
+    /* After power-on, disabled D-Cache has not necessarily had its ECC
+     * initialized. Never clean it in that state: maintenance can BusFault.
+     * If enabled later, it must be initialized with SCB_EnableDCache first.
+     * The buffer owns two complete, aligned cache lines. */
+    if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+    {
+        SCB_CleanInvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer,
+                                        RC_SBUS_DMA_BUFFER_SIZE);
+    }
+    __DSB(); /* Complete CPU memory accesses before handing the buffer to DMA. */
     status = HAL_UARTEx_ReceiveToIdle_DMA(&huart5, s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
     if (status == HAL_OK)
         __HAL_DMA_DISABLE_IT(huart5.hdmarx, DMA_IT_HT);
@@ -290,7 +299,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
     if (size > RC_SBUS_DMA_BUFFER_SIZE) size = RC_SBUS_DMA_BUFFER_SIZE;
     if (size != 0U)
     {
-        SCB_InvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
+        if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+        {
+            SCB_InvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer,
+                                       RC_SBUS_DMA_BUFFER_SIZE);
+        }
+        __DSB(); /* Complete maintenance before copying received bytes. */
         RcSbus_RxBytesFromISR(s_uart5_dma_buffer, size);
     }
     (void)RcSbus_ArmUart5Reception();
