@@ -26,11 +26,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
-#include "atom_imu.h"
 #include "esc_pwm.h"
-#include "flight_control.h"
 #include "fdcan.h"
-#include "rc_sbus.h"
 #include "usart.h"
 #include "ws2812.h"
 /* USER CODE END Includes */
@@ -120,9 +117,6 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   App_Main_Init();
-  AtomImu_Init();
-  RcSbus_Init();
-  FlightControl_Init();
   if (EscPwm_Init() != HAL_OK)
   {
     Error_Handler();
@@ -236,7 +230,7 @@ void Error_Handler(void)
     __disable_irq();
     while (1)
     {
-      WS2812_Ctrl(255U, 0U, 0U);
+      WS2812_Ctrl(0U, 255U, 0U);
       Error_Delay(100U);   // ÁÁ 100ms
       WS2812_Ctrl(0U, 0U, 0U);
       Error_Delay(100U);   // Ãð 100ms

@@ -1,70 +1,21 @@
 #include "app_main.h"
 
-#include "cmsis_os2.h"
 #include "main.h"
+#include "atom_imu.h"
+#include "rc_sbus.h"
 #include "ws2812.h"
+#include "flight_control.h"
 
-#define WS2812_TASK_PERIOD_MS  20U
-
-osThreadId_t ws2812TaskHandle;
-volatile uint32_t ws2812_frame_count = 0U;
-volatile uint32_t ws2812_task_loop_count = 0U;
-volatile uint32_t ws2812_boot_status = 0xFFFFFFFFU;
-volatile uint32_t ws2812_task_started = 0U;
-
-static void WS2812_ColorTask(void *argument)
-{
-    uint8_t red = 255U;
-    uint8_t green = 0U;
-    uint8_t blue = 0U;
-
-    (void)argument;
-    ws2812_task_started = 1U;
-
-    for (;;)
-    {
-        ws2812_task_loop_count++;
-        if (WS2812_Ctrl(red, green, blue) == HAL_OK)
-        {
-            ws2812_frame_count++;
-        }
-        if (red <= 255U && red != 0U && green <= 255U && blue == 0U)
-        {
-            green += 5;
-            red -= 5;
-        }
-        else if (green <= 255U && green != 0U && blue <= 255U && red == 0U)
-        {
-            green -= 5;
-            blue += 5;
-        }
-        else if (blue <= 255U && blue != 0U && red <= 255U && green == 0U)
-        {
-            blue -= 5;
-            red += 5;
-        }
-        osDelay(WS2812_TASK_PERIOD_MS);
-    }
-}
 
 void App_Main_Init(void)
 {
     WS2812_Init();
     /* Visible red before scheduler startup distinguishes SPI from RTOS faults. */
-    ws2812_boot_status = (uint32_t)WS2812_Ctrl(64U, 0U, 0U);
+    AtomImu_Init();
+    RcSbus_Init();
+    FlightControl_Init();
 }
 
 void App_Main_Start(void)
 {
-    static const osThreadAttr_t ws2812_task_attributes = {
-        .name = "ws2812",
-        .stack_size = 256U * 4U,
-        .priority = (osPriority_t)osPriorityLow,
-    };
-
-    ws2812TaskHandle = osThreadNew(WS2812_ColorTask, NULL, &ws2812_task_attributes);
-    if (ws2812TaskHandle == NULL)
-    {
-        Error_Handler();
-    }
 }

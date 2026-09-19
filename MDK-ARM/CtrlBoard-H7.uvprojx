@@ -132,13 +132,13 @@
             <UseTargetDll>1</UseTargetDll>
             <UseExternalTool>0</UseExternalTool>
             <RunIndependent>0</RunIndependent>
-            <UpdateFlashBeforeDebugging>1</UpdateFlashBeforeDebugging>
+            <UpdateFlashBeforeDebugging>0</UpdateFlashBeforeDebugging>
             <Capability>1</Capability>
-            <DriverSelection>4101</DriverSelection>
+            <DriverSelection>4096</DriverSelection>
           </Flash1>
           <bUseTDR>1</bUseTDR>
           <Flash2>BIN\UL2CM3.DLL</Flash2>
-          <Flash3></Flash3>
+          <Flash3>"" ()</Flash3>
           <Flash4></Flash4>
           <pFcarmOut></pFcarmOut>
           <pFcarmGrp></pFcarmGrp>
@@ -603,6 +603,11 @@
               <FileName>esc_pwm.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/esc_pwm.c</FilePath>
+            </File>
+            <File>
+              <FileName>ws2812_ctrl.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\App\ws2812_ctrl.c</FilePath>
             </File>
           </Files>
         </Group>

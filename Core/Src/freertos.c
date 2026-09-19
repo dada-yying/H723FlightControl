@@ -23,6 +23,7 @@
 #include "vofa.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
+#include "ws2812_ctrl.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -66,6 +67,14 @@ const osThreadAttr_t flightControlTask_attributes = {
   .priority = (osPriority_t) osPriorityHigh,
 };
 
+osThreadId_t ws2812TaskHandle;
+const osThreadAttr_t ws2812_task_attributes = {
+  .name = "ws2812",
+  .stack_size = 256U * 4,
+  .priority = (osPriority_t)osPriorityLow,
+};
+
+
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 
@@ -106,6 +115,7 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  ws2812TaskHandle = osThreadNew(WS2812_ColorTask, NULL, &ws2812_task_attributes);
   rcTaskHandle = osThreadNew(StartRcTask, NULL, &rcTask_attributes);
   flightControlTaskHandle = osThreadNew(StartFlightControlTask, NULL, &flightControlTask_attributes);
 
@@ -114,6 +124,11 @@ void MX_FREERTOS_Init(void) {
   {
     Error_Handler();
   }
+  if (ws2812TaskHandle == NULL)
+  {
+    Error_Handler();
+  }
+
   if (rcTaskHandle == NULL)
   {
     Error_Handler();

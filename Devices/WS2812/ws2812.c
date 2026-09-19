@@ -12,10 +12,12 @@ volatile uint32_t ws2812_tx_status;
 volatile uint32_t ws2812_spi_error;
 volatile uint32_t ws2812_error_count;
 volatile uint32_t ws2812_spi_sr;
+volatile uint32_t ws2812_boot_status = 0xFFFFFFFFU;
 
 void WS2812_Init(void)
 {
     MX_SPI6_Init();
+    ws2812_boot_status = (uint32_t)WS2812_Ctrl(64U, 0U, 0U);
 }
 
 HAL_StatusTypeDef WS2812_Ctrl(uint8_t red, uint8_t green, uint8_t blue)
