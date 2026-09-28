@@ -12,9 +12,25 @@
 #define FLIGHT_RATE_INTEGRAL_LIMIT 0.30f
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
+#define FLIGHT_FILTER_DEFAULT_HZ 50.0f
+#define FLIGHT_FILTER_MIN_HZ 5.0f
+#define FLIGHT_FILTER_MAX_HZ 200.0f
+#define FLIGHT_TWO_PI 6.28318530717958647692f
 
 volatile FlightControlPidConfig_t g_flight_control_pid;
 volatile FlightControlState_t g_flight_control_state;
+volatile FlightControlTuning_t g_flight_control_tuning;
+volatile FlightControlFilter_t g_flight_control_filter;
+static float s_filter_cutoff_hz;
+static float s_filtered_rate[3];
+static uint32_t s_filter_rx_count;
+static uint8_t s_filter_seen_sample;
+static uint8_t s_filter_initialized;
+static uint8_t s_tuning_active;
+static uint8_t s_previous_armed;
+static RcTuningAxis_t s_selected_axis;
+static uint8_t s_waiting_center;
+static uint32_t s_center_after_frame;
 static TaskHandle_t s_flight_task_handle;
 static uint32_t s_last_cycle;
 static uint8_t s_have_cycle;
@@ -67,8 +83,61 @@ static void FlightControl_ResetController(void)
     s_output_saturated = 0U;
 }
 
+/* Task-only LPF in body coordinates, rad/s. Independent of PID resets. */
+static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
+{
+    const float requested = g_flight_control_filter.cutoff_hz;
+    float raw[3];
+    float alpha;
+    uint32_t axis;
+
+    /* Ordered bounds also reject NaN and either infinity. */
+    if ((requested >= FLIGHT_FILTER_MIN_HZ) && (requested <= FLIGHT_FILTER_MAX_HZ))
+        s_filter_cutoff_hz = requested;
+    g_flight_control_filter.applied_cutoff_hz = s_filter_cutoff_hz;
+    if (imu->gyro_valid == 0U)
+    {
+        s_filter_initialized = 0U;
+        return;
+    }
+    if ((s_filter_seen_sample != 0U) && (imu->gyro_rx_count == s_filter_rx_count))
+        return;
+    s_filter_seen_sample = 1U;
+    s_filter_rx_count = imu->gyro_rx_count;
+    /* Shared PID/telemetry mapping: swap the former Roll/Pitch rate values.
+     * Keep CAN decoding and Euler-angle mapping unchanged. */
+    raw[0] = -imu->gyro_y;
+    raw[1] = -imu->gyro_x;
+    raw[2] = -imu->gyro_z;
+    alpha = dt / (1.0f / (FLIGHT_TWO_PI * s_filter_cutoff_hz) + dt);
+    for (axis = 0U; axis < 3U; axis++)
+    {
+        if (s_filter_initialized == 0U)
+            s_filtered_rate[axis] = raw[axis];
+        else
+            s_filtered_rate[axis] += alpha * (raw[axis] - s_filtered_rate[axis]);
+    }
+    s_filter_initialized = 1U;
+    g_flight_control_state.roll_rate_rad_s = s_filtered_rate[0];
+    g_flight_control_state.pitch_rate_rad_s = s_filtered_rate[1];
+    g_flight_control_state.yaw_rate_rad_s = s_filtered_rate[2];
+}
+
 void FlightControl_Init(void)
 {
+    s_filter_cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
+    g_flight_control_filter.cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
+    g_flight_control_filter.applied_cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
+    s_filter_initialized = 0U;
+    s_filter_seen_sample = 0U;
+    s_filter_rx_count = 0U;
+    (void)memset(s_filtered_rate, 0, sizeof(s_filtered_rate));
+    (void)memset((void *)&g_flight_control_tuning, 0, sizeof(g_flight_control_tuning));
+    s_tuning_active = 0U;
+    s_previous_armed = 0U;
+    s_selected_axis = RC_TUNING_ROLL;
+    s_waiting_center = 1U;
+    s_center_after_frame = 0U;
     (void)memset((void *)&g_flight_control_pid, 0, sizeof(g_flight_control_pid));
     (void)memset((void *)&g_flight_control_state, 0, sizeof(g_flight_control_state));
     s_flight_task_handle = NULL;
@@ -120,9 +189,9 @@ void FlightControl_Run(void)
     float dt = FlightControl_DeltaSeconds();
     float roll_target_rate;
     float pitch_target_rate;
-    float roll_output;
-    float pitch_output;
-    float yaw_output;
+    float roll_output = 0.0f;
+    float pitch_output = 0.0f;
+    float yaw_output = 0.0f;
     float motor[4];
     uint32_t motor_index;
     uint32_t now = HAL_GetTick();
@@ -134,12 +203,41 @@ void FlightControl_Run(void)
     g_flight_control_state.roll_rad = -imu.roll;
     g_flight_control_state.pitch_rad = imu.pitch;
     g_flight_control_state.yaw_rad = imu.yaw;
-    g_flight_control_state.roll_rate_rad_s = -imu.gyro_x;
-    g_flight_control_state.pitch_rate_rad_s = imu.gyro_y;
-    g_flight_control_state.yaw_rate_rad_s = -imu.gyro_z;
+    FlightControl_FilterGyro(&imu, dt);
     g_flight_control_state.imu_valid = (imu.gyro_valid != 0U) ? 1U : 0U;
     g_flight_control_state.rc_valid = (rc.valid != 0U && rc.failsafe == 0U) ? 1U : 0U;
     g_flight_control_state.armed = EscPwm_IsArmed();
+
+    /* Only the request is writable configuration; internal state is authoritative. */
+    if ((g_flight_control_state.armed == 0U) &&
+        ((g_flight_control_tuning.pid_debug == 0U) || (g_flight_control_tuning.pid_debug == 1U)) &&
+        (s_tuning_active != (uint8_t)g_flight_control_tuning.pid_debug))
+    {
+        s_tuning_active = (uint8_t)g_flight_control_tuning.pid_debug;
+        FlightControl_ResetController();
+        s_waiting_center = 1U;
+        s_center_after_frame = rc.valid_frame_count;
+    }
+    if (s_tuning_active != 0U)
+    {
+        if ((rc.tuning_axis_valid == 0U) || (s_selected_axis != rc.tuning_axis) ||
+            ((g_flight_control_state.armed != 0U) && (s_previous_armed == 0U)))
+        {
+            FlightControl_ResetController();
+            s_selected_axis = rc.tuning_axis;
+            s_waiting_center = 1U;
+            s_center_after_frame = rc.valid_frame_count;
+        }
+        if ((rc.valid != 0U) && (rc.failsafe == 0U) && (rc.frame_lost == 0U) &&
+            (rc.tuning_axis_valid != 0U) && (rc.valid_frame_count != s_center_after_frame) &&
+            (rc.tuning_rate_rad_s == 0.0f))
+            s_waiting_center = 0U;
+    }
+    s_previous_armed = g_flight_control_state.armed;
+    g_flight_control_tuning.active = s_tuning_active;
+    g_flight_control_tuning.selected_axis = (uint8_t)s_selected_axis;
+    g_flight_control_tuning.waiting_center = (s_tuning_active != 0U) ? s_waiting_center : 0U;
+    g_flight_control_tuning.input_rate_rad_s = rc.tuning_rate_rad_s;
 
     if ((imu.gyro_valid == 0U) || (rc.valid == 0U) || (rc.failsafe != 0U) ||
         ((now - rc.last_valid_tick) >= 100U))
@@ -151,6 +249,9 @@ void FlightControl_Run(void)
             reason = ESC_PWM_INHIBIT_RC_TIMEOUT;
         FlightControl_ResetController();
         EscPwm_ForceMinimum(reason);
+        s_previous_armed = 0U;
+        s_waiting_center = 1U;
+        g_flight_control_tuning.waiting_center = s_tuning_active;
         g_flight_control_state.running = 0U;
         g_flight_control_state.armed = 0U;
         g_flight_control_state.roll_rate_target_rad_s = 0.0f;
@@ -173,17 +274,38 @@ void FlightControl_Run(void)
     g_flight_control_state.pitch_rate_target_rad_s = pitch_target_rate;
     g_flight_control_state.yaw_rate_target_rad_s = rc.yaw_rate_target_rad_s;
 
-    roll_output = FlightControl_RatePid(roll_target_rate, g_flight_control_state.roll_rate_rad_s,
-                                        dt, (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_roll,
-                                        &s_roll_integral, &s_last_roll_error);
-    pitch_output = FlightControl_RatePid(pitch_target_rate, g_flight_control_state.pitch_rate_rad_s,
-                                         dt, (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_pitch,
-                                         &s_pitch_integral, &s_last_pitch_error);
-    yaw_output = FlightControl_RatePid(g_flight_control_state.yaw_rate_target_rad_s,
-                                       g_flight_control_state.yaw_rate_rad_s, dt,
-                                       (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_yaw,
-                                       &s_yaw_integral, &s_last_yaw_error);
-    s_have_error = 1U;
+    if (s_tuning_active != 0U)
+    {
+        float target = (s_waiting_center == 0U) ? rc.tuning_rate_rad_s : 0.0f;
+        roll_target_rate = (s_selected_axis == RC_TUNING_ROLL) ? target : 0.0f;
+        pitch_target_rate = (s_selected_axis == RC_TUNING_PITCH) ? target : 0.0f;
+        g_flight_control_state.roll_rate_target_rad_s = roll_target_rate;
+        g_flight_control_state.pitch_rate_target_rad_s = pitch_target_rate;
+        g_flight_control_state.yaw_rate_target_rad_s = (s_selected_axis == RC_TUNING_YAW) ? target : 0.0f;
+    }
+
+    if ((g_flight_control_state.armed == 0U) ||
+        ((s_tuning_active != 0U) && (s_waiting_center != 0U)))
+    {
+        FlightControl_ResetController();
+    }
+    else
+    {
+        if ((s_tuning_active == 0U) || (s_selected_axis == RC_TUNING_ROLL))
+            roll_output = FlightControl_RatePid(roll_target_rate, g_flight_control_state.roll_rate_rad_s,
+                                                dt, (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_roll,
+                                                &s_roll_integral, &s_last_roll_error);
+        if ((s_tuning_active == 0U) || (s_selected_axis == RC_TUNING_PITCH))
+            pitch_output = FlightControl_RatePid(pitch_target_rate, g_flight_control_state.pitch_rate_rad_s,
+                                                 dt, (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_pitch,
+                                                 &s_pitch_integral, &s_last_pitch_error);
+        if ((s_tuning_active == 0U) || (s_selected_axis == RC_TUNING_YAW))
+            yaw_output = FlightControl_RatePid(g_flight_control_state.yaw_rate_target_rad_s,
+                                               g_flight_control_state.yaw_rate_rad_s, dt,
+                                               (const FlightControlPidAxis_t *)&g_flight_control_pid.rate_yaw,
+                                               &s_yaw_integral, &s_last_yaw_error);
+        s_have_error = 1U;
+    }
 
     /* M1=left rear CCW, M2=right rear CW, M3=right front CCW, M4=left front CW. */
     motor[0] = rc.throttle + pitch_output + roll_output + yaw_output;
@@ -199,6 +321,7 @@ void FlightControl_Run(void)
             s_output_saturated = 1U;
         }
         motor[motor_index] = FlightControl_Clamp(motor[motor_index], 0.0f, 1.0f);
+        if (g_flight_control_state.armed == 0U) motor[motor_index] = 0.0f;
         g_flight_control_state.motor_command[motor_index] = motor[motor_index];
     }
     if (EscPwm_IsArmed() != 0U)
@@ -210,8 +333,12 @@ void FlightControl_OnTaskTimeout(void)
 {
     if ((HAL_GetTick() - s_last_control_tick) >= FLIGHT_IMU_TIMEOUT_MS)
     {
+        s_filter_initialized = 0U;
         FlightControl_ResetController();
         EscPwm_ForceMinimum(ESC_PWM_INHIBIT_IMU_TIMEOUT);
+        s_previous_armed = 0U;
+        s_waiting_center = 1U;
+        g_flight_control_tuning.waiting_center = s_tuning_active;
         g_flight_control_state.running = 0U;
         g_flight_control_state.imu_valid = 0U;
         g_flight_control_state.armed = 0U;

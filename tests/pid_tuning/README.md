@@ -1,0 +1,43 @@
+# 单轴内环调参
+
+锁定电调后，在 Keil Watch 将 `g_flight_control_tuning.pid_debug` 设为 1。
+`active=1` 表示已经进入调参模式；设为 0 请求恢复双环，同样只在锁定时生效。
+解锁期间的模式请求会保留，到锁定后生效。上电始终默认 0。
+
+CH5 低位 Roll、中位 Yaw、高位 Pitch，`selected_axis` 分别为 0、1、2。
+新档位连续三个有效帧后确认。CH10 滑杆最高为 +90°/s，中位为 0，最低为 -90°/s。
+`input_rate_rad_s` 是映射后指令，控制器内部单位仍为 rad/s。
+
+进入调参、切轴、重新解锁后，必须收到新的 CH10 回中有效帧；
+`waiting_center=0` 后才接受非零指令。等待期间三个轴修正输出均为零，基础油门仍有效。
+仅所选轴运行 PID，另外两轴没有角速度稳定作用。
+PID 参数仍使用 `g_flight_control_pid.rate_roll/rate_pitch/rate_yaw` 的 kp、ki、kd。
+
+VOFA 使用 115200、8N1、JustFloat、100 Hz。原 CH0~CH6 保持不变，Cube 仍用 CH0~CH2。
+CH7/8 为 Roll 目标/实际，CH9/10 为 Pitch 目标/实际，CH11/12 为 Yaw 目标/实际，单位均为 °/s。
+新增实际值采用控制器机体坐标；CH0~CH2 仍为原 IMU 姿态坐标。
+角速度映射为 Roll = +gyro_y、Pitch = -gyro_x、Yaw = -gyro_z，先映射再滤波。
+PID 与 CH8/10/12 共用这些滤波反馈；目标角速度、CAN 解包及姿态角映射未交换。
+
+## 角速度一阶低通
+
+三轴反馈常开一阶低通，默认 50 Hz，PID 和 VOFA CH8/10/12 使用同一滤波结果。
+`g_atom_imu_data.gyro_x/y/z` 仍保留原始 rad/s 数据。
+Watch 修改 `g_flight_control_filter.cutoff_hz`，有效范围 5～200 Hz；
+`applied_cutoff_hz` 显示实际生效值，越界和非有限值不应用。
+解锁期间也允许修改，下一次控制更新生效；改变频率不清除滤波历史或 PID 历史。
+首次有效样本、IMU 超时恢复使用新样本初始化，重复计数不重复迭代。
+锁定、RC 失联、切换模式或轴不重置滤波；上电恢复 50 Hz，不保存参数。
+在线改频率会改变闭环响应，先拆桨验证；静止噪声变小不等于飞行稳定性通过。
+
+## 验证
+
+运行 `tests/pid_tuning/run.ps1`：用 MSVC 编译实际 rc_sbus、flight_control、vofa 源码，
+替代 HAL/RTOS/电调接口来检查映射、有效帧确认、回中门控、单轴 Mixer、保护和串口字节布局。
+这不验证实际中断调度、串口时序或电机响应。
+测试还覆盖滤波初始化、正负阶跃、独立轴、变周期、重复样本、在线改频率、
+非法参数、超时恢复、计数回绕，以及 PID/VOFA 使用滤波反馈。
+轴交换回归分别检查 Roll/Pitch 的 PID 电机修正、CH8/10 对应关系，以及姿态角和目标值保持不变。
+
+固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory pid-tuning-verified`。
+在 Keil Rebuild 并烧录后，先拆桨验证 CH5/CH10、模式切换、回中和失联保护。

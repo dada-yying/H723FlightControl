@@ -51,6 +51,23 @@ typedef struct
 extern volatile FlightControlPidConfig_t g_flight_control_pid;
 extern volatile FlightControlState_t g_flight_control_state;
 
+typedef struct
+{
+    uint32_t pid_debug; /* Watch request: 0=normal, 1=single-axis tuning. */
+    uint8_t active;
+    uint8_t selected_axis; /* 0=Roll, 1=Yaw, 2=Pitch. */
+    uint8_t waiting_center;
+    float input_rate_rad_s;
+} FlightControlTuning_t;
+extern volatile FlightControlTuning_t g_flight_control_tuning;
+
+typedef struct
+{
+    float cutoff_hz;         /* Watch request: 5..200 Hz, applied even while armed. */
+    float applied_cutoff_hz; /* Observation only; invalid requests retain last value. */
+} FlightControlFilter_t;
+extern volatile FlightControlFilter_t g_flight_control_filter;
+
 void FlightControl_Init(void);
 void FlightControl_SetTaskHandle(TaskHandle_t task_handle);
 void FlightControl_NotifyFromISR(void);

@@ -49,7 +49,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 4,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -159,6 +159,8 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
   AtomImuData_t imu_data;
   RcSbusData_t rc_data;
+  FlightControlState_t flight_data;
+  float rates_deg_s[6];
   TickType_t last_wake_time = xTaskGetTickCount();
   const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
 
@@ -168,6 +170,13 @@ void StartDefaultTask(void *argument)
     FDCAN3_UpdateDiagnostics();
     AtomImu_GetData(&imu_data);
     RcSbus_GetData(&rc_data);
+    FlightControl_GetState(&flight_data);
+    rates_deg_s[0] = flight_data.roll_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
+    rates_deg_s[1] = flight_data.roll_rate_rad_s * (180.0f / 3.14159265358979323846f);
+    rates_deg_s[2] = flight_data.pitch_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
+    rates_deg_s[3] = flight_data.pitch_rate_rad_s * (180.0f / 3.14159265358979323846f);
+    rates_deg_s[4] = flight_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
+    rates_deg_s[5] = flight_data.yaw_rate_rad_s * (180.0f / 3.14159265358979323846f);
     /* IMU axes stay native; any airframe coordinate conversion belongs above this layer. */
     (void)VOFA_SendFlightTelemetry(
         imu_data.roll * (180.0f / 3.14159265358979323846f),
@@ -176,7 +185,7 @@ void StartDefaultTask(void *argument)
         rc_data.throttle,
         rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
         rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),
-        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f));
+        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f), rates_deg_s);
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */
@@ -240,4 +249,3 @@ void StartFlightControlTask(void *argument)
 /* USER CODE BEGIN Application */
 
 /* USER CODE END Application */
-

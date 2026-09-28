@@ -30,6 +30,13 @@
 #define RC_SBUS_MAX_TILT_RAD (30.0f * 3.14159265358979323846f / 180.0f)
 #define RC_SBUS_MAX_YAW_RATE_RAD_S (180.0f * 3.14159265358979323846f / 180.0f)
 #define RC_SBUS_TIMEOUT_MS 100U
+#define RC_TUNING_MIN 352U
+#define RC_TUNING_CENTER 1024U
+#define RC_TUNING_MAX 1696U
+#define RC_TUNING_AXIS_LOW_BOUND 688U
+#define RC_TUNING_AXIS_HIGH_BOUND 1360U
+#define RC_TUNING_CONFIRM_FRAMES 3U
+#define RC_TUNING_MAX_RATE (90.0f * 3.14159265358979323846f / 180.0f)
 #define RC_SBUS_DMA_BUFFER_SIZE 64U
 #define RC_SBUS_RX_RING_SIZE 128U
 
@@ -43,6 +50,8 @@ static volatile uint16_t s_rx_tail;
 static volatile uint32_t s_rx_overrun_count;
 static TaskHandle_t s_rc_task_handle;
 static uint8_t s_frame[RC_SBUS_FRAME_SIZE];
+static RcTuningAxis_t s_axis_candidate;
+static uint8_t s_axis_confirm_count;
 static uint8_t s_frame_index;
 static volatile uint8_t s_restart_pending;
 
@@ -95,16 +104,22 @@ static uint16_t RcSbus_UnpackChannel(const uint8_t frame[RC_SBUS_FRAME_SIZE], ui
 
 static void RcSbus_PublishSafe(void)
 {
+    taskENTER_CRITICAL();
     g_rc_sbus_data.throttle = 0.0f;
     g_rc_sbus_data.roll_target_rad = 0.0f;
     g_rc_sbus_data.pitch_target_rad = 0.0f;
     g_rc_sbus_data.yaw_rate_target_rad_s = 0.0f;
     g_rc_sbus_data.valid = 0U;
+    g_rc_sbus_data.tuning_rate_rad_s = 0.0f;
+    g_rc_sbus_data.tuning_axis_valid = 0U;
+    s_axis_confirm_count = 0U;
+    taskEXIT_CRITICAL();
 }
 
 static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
 {
     uint8_t index;
+    RcTuningAxis_t candidate;
     const uint8_t flags = frame[23];
     g_rc_sbus_data.frame_count++;
     for (index = 0U; index < RC_SBUS_CHANNEL_COUNT; index++)
@@ -123,6 +138,7 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
     }
     if (g_rc_sbus_data.frame_lost != 0U)
     {
+        s_axis_confirm_count = 0U;
         /* Keep the last GOOD targets only within the existing 100 ms window.
          * Never refresh last_valid_tick or valid_frame_count on a lost frame.
          * Raw channels above remain available for diagnostics, not control. */
@@ -143,6 +159,20 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
         RcSbus_MapCentered(g_rc_sbus_data.channel[3], RC_SBUS_YAW_MIN,
                           RC_SBUS_YAW_CENTER, RC_SBUS_YAW_MAX) * RC_SBUS_MAX_YAW_RATE_RAD_S;
     g_rc_sbus_data.last_valid_tick = HAL_GetTick();
+    /* Physical high is the smaller SBUS value on this transmitter. */
+    g_rc_sbus_data.tuning_rate_rad_s = -RcSbus_MapCentered(
+        g_rc_sbus_data.channel[9], RC_TUNING_MIN, RC_TUNING_CENTER,
+        RC_TUNING_MAX) * RC_TUNING_MAX_RATE;
+    candidate = (g_rc_sbus_data.channel[4] < RC_TUNING_AXIS_LOW_BOUND) ? RC_TUNING_PITCH :
+        ((g_rc_sbus_data.channel[4] > RC_TUNING_AXIS_HIGH_BOUND) ? RC_TUNING_ROLL : RC_TUNING_YAW);
+    if (candidate != s_axis_candidate) s_axis_confirm_count = 0U;
+    s_axis_candidate = candidate;
+    if (s_axis_confirm_count < RC_TUNING_CONFIRM_FRAMES) s_axis_confirm_count++;
+    if (s_axis_confirm_count >= RC_TUNING_CONFIRM_FRAMES)
+    {
+        g_rc_sbus_data.tuning_axis = candidate;
+        g_rc_sbus_data.tuning_axis_valid = 1U;
+    }
     g_rc_sbus_data.valid_frame_count++;
     g_rc_sbus_data.valid = 1U;
 }
@@ -164,7 +194,10 @@ static void RcSbus_ConsumeByte(uint8_t byte)
     if ((byte == RC_SBUS_FRAME_END) || (byte == 0x08U) ||
         ((byte & 0xCFU) == 0x04U))
     {
+        /* Protect publication against the higher-priority control task. */
+        taskENTER_CRITICAL();
         RcSbus_ProcessFrame(s_frame);
+        taskEXIT_CRITICAL();
         s_frame_index = 0U;
     }
     else
@@ -208,6 +241,8 @@ void RcSbus_Init(void)
     s_rc_task_handle = NULL;
     s_frame_index = 0U;
     s_restart_pending = 0U;
+    s_axis_confirm_count = 0U;
+    s_axis_candidate = RC_TUNING_ROLL;
 }
 
 HAL_StatusTypeDef RcSbus_StartReception(void)

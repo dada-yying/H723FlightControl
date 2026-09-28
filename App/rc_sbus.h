@@ -12,6 +12,8 @@ extern "C" {
 
 #define RC_SBUS_CHANNEL_COUNT 16U
 
+typedef enum { RC_TUNING_ROLL = 0, RC_TUNING_YAW = 1, RC_TUNING_PITCH = 2 } RcTuningAxis_t;
+
 typedef struct
 {
     uint16_t channel[RC_SBUS_CHANNEL_COUNT];
@@ -19,6 +21,9 @@ typedef struct
     float roll_target_rad;
     float pitch_target_rad;
     float yaw_rate_target_rad_s;
+    float tuning_rate_rad_s;
+    RcTuningAxis_t tuning_axis;
+    uint8_t tuning_axis_valid;
     uint32_t frame_count;
     uint32_t valid_frame_count;
     uint32_t frame_lost_count;
