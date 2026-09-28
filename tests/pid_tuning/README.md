@@ -16,28 +16,50 @@ PID 参数仍使用 `g_flight_control_pid.rate_roll/rate_pitch/rate_yaw` 的 kp�
 VOFA 使用 115200、8N1、JustFloat、100 Hz。原 CH0~CH6 保持不变，Cube 仍用 CH0~CH2。
 CH7/8 为 Roll 目标/实际，CH9/10 为 Pitch 目标/实际，CH11/12 为 Yaw 目标/实际，单位均为 °/s。
 新增实际值采用控制器机体坐标；CH0~CH2 仍为原 IMU 姿态坐标。
-角速度映射为 Roll = +gyro_y、Pitch = -gyro_x、Yaw = -gyro_z，先映射再滤波。
+角速度映射为 Roll = -gyro_y、Pitch = -gyro_x、Yaw = -gyro_z，先映射再滤波。
 PID 与 CH8/10/12 共用这些滤波反馈；目标角速度、CAN 解包及姿态角映射未交换。
 
-## 角速度一阶低通
+## 角速度一维卡尔曼滤波
 
-三轴反馈常开一阶低通，默认 50 Hz，PID 和 VOFA CH8/10/12 使用同一滤波结果。
+三轴反馈各自维护角速度估计 x 和协方差 P，使用随机游走模型，共用 Q/R 参数。
+滤波常开，PID 和 VOFA CH8/10/12 使用同一滤波结果，不融合姿态角、不估计零偏。
 `g_atom_imu_data.gyro_x/y/z` 仍保留原始 rad/s 数据。
-Watch 修改 `g_flight_control_filter.cutoff_hz`，有效范围 5～200 Hz；
-`applied_cutoff_hz` 显示实际生效值，越界和非有限值不应用。
-解锁期间也允许修改，下一次控制更新生效；改变频率不清除滤波历史或 PID 历史。
-首次有效样本、IMU 超时恢复使用新样本初始化，重复计数不重复迭代。
-锁定、RC 失联、切换模式或轴不重置滤波；上电恢复 50 Hz，不保存参数。
-在线改频率会改变闭环响应，先拆桨验证；静止噪声变小不等于飞行稳定性通过。
+
+Keil Watch 接口（旧 cutoff_hz / applied_cutoff_hz 已移除）：
+
+| 字段 | 默认值 | 含义 |
+|---|---|---|
+| `g_flight_control_filter.q` | 0.07510204 | 每 1 ms 的过程噪声协方差参数 |
+| `g_flight_control_filter.r` | 1.0 | 测量噪声协方差参数 |
+| `g_flight_control_filter.applied_q` | 0.07510204 | 实际生效 q，只读观察 |
+| `g_flight_control_filter.applied_r` | 1.0 | 实际生效 r，只读观察 |
+| `g_flight_control_filter.gain[0..2]` | 初始化前 0 | 最近更新增益，Roll/Pitch/Yaw；首样本直接采纳时为 1 |
+
+q/r 的名义协方差单位均为 (rad/s)^2；q 在每次更新按 dt/0.001 缩放。
+默认值是响应匹配参数，不是实测噪声标定。在 1 kHz 下稳态 K 约 0.239057，
+接近原 50 Hz 一阶低通；不保证默认设置比原低通更能抑制振荡。
+固定采样周期、固定 Q/R 时，稳态响应仍相当于固定增益的一阶平滑。
+
+q、r 均只接受 1e-6～1e3 的有限值；任一非法则整组拒绝，继续使用上一组有效值。
+解锁期间也允许修改，下一次新 GYRO 样本更新生效，不重置 x/P 或 PID 历史。
+Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没有额外的提交开关。
+增大 q/r 比值会更快跟随、减弱平滑；减小则增强平滑、增加延迟。
+
+更新：P_pred=P+q*dt/0.001，K=P_pred/(P_pred+r)，x+=K*(measurement-x)。
+协方差使用 Joseph 形式更新：P=(1-K)^2*P_pred+K^2*r。
+首次有效样本及 IMU 超时恢复直接初始化 x，并用当前 Q_step/r 的稳态后验值初始化 P。
+重复计数不执行预测或更新，也不应用新参数；跳过的样本不补算。
+锁定、RC 失联、切换模式或轴不重置正常滤波；上电恢复默认 q/r，不保存参数。
+在线改参会改变闭环响应，先拆桨验证；曲线更平滑不代表闭环或飞行稳定性通过。
 
 ## 验证
 
 运行 `tests/pid_tuning/run.ps1`：用 MSVC 编译实际 rc_sbus、flight_control、vofa 源码，
 替代 HAL/RTOS/电调接口来检查映射、有效帧确认、回中门控、单轴 Mixer、保护和串口字节布局。
 这不验证实际中断调度、串口时序或电机响应。
-测试还覆盖滤波初始化、正负阶跃、独立轴、变周期、重复样本、在线改频率、
-非法参数、超时恢复、计数回绕，以及 PID/VOFA 使用滤波反馈。
+测试还覆盖滤波初始化、默认稳态增益、正负阶跃、独立轴、变周期、重复样本、在线改 q/r、
+非法参数整组拒绝、超时恢复、计数回绕、极端 q/r 下协方差与增益，以及 PID/VOFA 使用滤波反馈。
 轴交换回归分别检查 Roll/Pitch 的 PID 电机修正、CH8/10 对应关系，以及姿态角和目标值保持不变。
 
-固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory pid-tuning-verified`。
+固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory gyro-kalman-verified`。
 在 Keil Rebuild 并烧录后，先拆桨验证 CH5/CH10、模式切换、回中和失联保护。

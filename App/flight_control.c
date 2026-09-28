@@ -1,5 +1,6 @@
 #include "flight_control.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "atom_imu.h"
@@ -12,17 +13,21 @@
 #define FLIGHT_RATE_INTEGRAL_LIMIT 0.30f
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
-#define FLIGHT_FILTER_DEFAULT_HZ 50.0f
-#define FLIGHT_FILTER_MIN_HZ 5.0f
-#define FLIGHT_FILTER_MAX_HZ 200.0f
-#define FLIGHT_TWO_PI 6.28318530717958647692f
+/* Nominal covariances: steady K matches the former 50 Hz LPF at 1 kHz.
+ * These are response-matching defaults, not measured IMU noise statistics. */
+#define FLIGHT_FILTER_DEFAULT_Q 0.07510204f
+#define FLIGHT_FILTER_DEFAULT_R 1.0f
+#define FLIGHT_FILTER_MIN_NOISE 0.000001f
+#define FLIGHT_FILTER_MAX_NOISE 1000.0f
 
 volatile FlightControlPidConfig_t g_flight_control_pid;
 volatile FlightControlState_t g_flight_control_state;
 volatile FlightControlTuning_t g_flight_control_tuning;
 volatile FlightControlFilter_t g_flight_control_filter;
-static float s_filter_cutoff_hz;
+static float s_filter_q;
+static float s_filter_r;
 static float s_filtered_rate[3];
+static float s_filter_covariance[3];
 static uint32_t s_filter_rx_count;
 static uint8_t s_filter_seen_sample;
 static uint8_t s_filter_initialized;
@@ -83,18 +88,17 @@ static void FlightControl_ResetController(void)
     s_output_saturated = 0U;
 }
 
-/* Task-only LPF in body coordinates, rad/s. Independent of PID resets. */
+/* Task-only scalar random-walk Kalman filters, rad/s. No attitude/bias fusion.
+ * Each axis owns x/P; Q/R are shared. Independent of PID resets. */
 static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
 {
-    const float requested = g_flight_control_filter.cutoff_hz;
+    float requested_q;
+    float requested_r;
     float raw[3];
-    float alpha;
+    float q_step;
+    float initial_covariance = 0.0f;
     uint32_t axis;
 
-    /* Ordered bounds also reject NaN and either infinity. */
-    if ((requested >= FLIGHT_FILTER_MIN_HZ) && (requested <= FLIGHT_FILTER_MAX_HZ))
-        s_filter_cutoff_hz = requested;
-    g_flight_control_filter.applied_cutoff_hz = s_filter_cutoff_hz;
     if (imu->gyro_valid == 0U)
     {
         s_filter_initialized = 0U;
@@ -102,20 +106,54 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     }
     if ((s_filter_seen_sample != 0U) && (imu->gyro_rx_count == s_filter_rx_count))
         return;
+    /* Read once per fresh sample. Reject the whole pair if either is invalid.
+     * Ordered bounds also reject NaN and either infinity. */
+    requested_q = g_flight_control_filter.q;
+    requested_r = g_flight_control_filter.r;
+    if ((requested_q >= FLIGHT_FILTER_MIN_NOISE) &&
+        (requested_q <= FLIGHT_FILTER_MAX_NOISE) &&
+        (requested_r >= FLIGHT_FILTER_MIN_NOISE) &&
+        (requested_r <= FLIGHT_FILTER_MAX_NOISE))
+    {
+        s_filter_q = requested_q;
+        s_filter_r = requested_r;
+    }
+    g_flight_control_filter.applied_q = s_filter_q;
+    g_flight_control_filter.applied_r = s_filter_r;
     s_filter_seen_sample = 1U;
     s_filter_rx_count = imu->gyro_rx_count;
-    /* Shared PID/telemetry mapping: swap the former Roll/Pitch rate values.
-     * Keep CAN decoding and Euler-angle mapping unchanged. */
+    /* Preserve the confirmed PID/telemetry signs and axis mapping.
+     * CAN decoding and Euler-angle mapping remain unchanged. */
     raw[0] = -imu->gyro_y;
     raw[1] = -imu->gyro_x;
     raw[2] = -imu->gyro_z;
-    alpha = dt / (1.0f / (FLIGHT_TWO_PI * s_filter_cutoff_hz) + dt);
+    q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
+    if (s_filter_initialized == 0U)
+    {
+        /* Positive solution of P^2 + Q*P - Q*R = 0, rationalized to
+         * avoid cancellation when Q is much larger than R. */
+        initial_covariance = (2.0f * q_step * s_filter_r) /
+            (sqrtf(q_step * q_step + 4.0f * q_step * s_filter_r) + q_step);
+    }
     for (axis = 0U; axis < 3U; axis++)
     {
         if (s_filter_initialized == 0U)
+        {
             s_filtered_rate[axis] = raw[axis];
+            s_filter_covariance[axis] = initial_covariance;
+            g_flight_control_filter.gain[axis] = 1.0f;
+        }
         else
-            s_filtered_rate[axis] += alpha * (raw[axis] - s_filtered_rate[axis]);
+        {
+            const float predicted = s_filter_covariance[axis] + q_step;
+            const float gain = predicted / (predicted + s_filter_r);
+            const float remaining = 1.0f - gain;
+            s_filtered_rate[axis] += gain * (raw[axis] - s_filtered_rate[axis]);
+            /* Joseph form preserves nonnegative covariance at extreme Q/R. */
+            s_filter_covariance[axis] = remaining * remaining * predicted +
+                                       gain * gain * s_filter_r;
+            g_flight_control_filter.gain[axis] = gain;
+        }
     }
     s_filter_initialized = 1U;
     g_flight_control_state.roll_rate_rad_s = s_filtered_rate[0];
@@ -125,13 +163,18 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
 
 void FlightControl_Init(void)
 {
-    s_filter_cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
-    g_flight_control_filter.cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
-    g_flight_control_filter.applied_cutoff_hz = FLIGHT_FILTER_DEFAULT_HZ;
+    s_filter_q = FLIGHT_FILTER_DEFAULT_Q;
+    s_filter_r = FLIGHT_FILTER_DEFAULT_R;
+    (void)memset((void *)&g_flight_control_filter, 0, sizeof(g_flight_control_filter));
+    g_flight_control_filter.q = s_filter_q;
+    g_flight_control_filter.r = s_filter_r;
+    g_flight_control_filter.applied_q = s_filter_q;
+    g_flight_control_filter.applied_r = s_filter_r;
     s_filter_initialized = 0U;
     s_filter_seen_sample = 0U;
     s_filter_rx_count = 0U;
     (void)memset(s_filtered_rate, 0, sizeof(s_filtered_rate));
+    (void)memset(s_filter_covariance, 0, sizeof(s_filter_covariance));
     (void)memset((void *)&g_flight_control_tuning, 0, sizeof(g_flight_control_tuning));
     s_tuning_active = 0U;
     s_previous_armed = 0U;

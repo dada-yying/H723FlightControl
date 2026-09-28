@@ -63,8 +63,11 @@ extern volatile FlightControlTuning_t g_flight_control_tuning;
 
 typedef struct
 {
-    float cutoff_hz;         /* Watch request: 5..200 Hz, applied even while armed. */
-    float applied_cutoff_hz; /* Observation only; invalid requests retain last value. */
+    float q;         /* Watch: process covariance per 1 ms, 1e-6..1e3. */
+    float r;         /* Watch: measurement covariance, 1e-6..1e3. */
+    float applied_q; /* Observation only; invalid pairs retain previous values. */
+    float applied_r;
+    float gain[3];   /* Observation: last update K, Roll/Pitch/Yaw; seed uses 1. */
 } FlightControlFilter_t;
 extern volatile FlightControlFilter_t g_flight_control_filter;
 
