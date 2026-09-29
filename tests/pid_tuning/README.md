@@ -15,9 +15,15 @@ PID 参数仍使用 `g_flight_control_pid.rate_roll/rate_pitch/rate_yaw` 的 kp�
 
 VOFA 使用 115200、8N1、JustFloat、100 Hz。原 CH0~CH6 保持不变，Cube 仍用 CH0~CH2。
 CH7/8 为 Roll 目标/实际，CH9/10 为 Pitch 目标/实际，CH11/12 为 Yaw 目标/实际，单位均为 °/s。
+CH13 为 Roll 滤波前角速度（`-gyro_y`），单位 °/s；每帧 14 个 float 加 JustFloat 帧尾，共 60 字节。
+原 CH0~CH12 的顺序和含义不变，串口发送超时仍为 10 ms。
 新增实际值采用控制器机体坐标；CH0~CH2 仍为原 IMU 姿态坐标。
 角速度映射为 Roll = -gyro_y、Pitch = -gyro_x、Yaw = -gyro_z，先映射再滤波。
 PID 与 CH8/10/12 共用这些滤波反馈；目标角速度、CAN 解包及姿态角映射未交换。
+`g_flight_control_state.roll_rate_raw_rad_s` 保存参与本次滤波的原始 Roll 输入，内部单位 rad/s。
+仅在新有效 GYRO 样本时更新，上电为零；无新样本或 IMU 无效/超时时保持上次值，恢复后随新样本更新。
+CH8 与 CH13 从同一次飞控快照取值。CH13 仅供观察，不替代 PID 反馈。
+两者均以 100 Hz 抽样发送，不是完整的高频原始数据记录；比较滤波效果时可同时观察 CH7、CH8、CH13。
 
 ## 角速度一维卡尔曼滤波
 
@@ -60,6 +66,8 @@ Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没�
 测试还覆盖滤波初始化、默认稳态增益、正负阶跃、独立轴、变周期、重复样本、在线改 q/r、
 非法参数整组拒绝、超时恢复、计数回绕、极端 q/r 下协方差与增益，以及 PID/VOFA 使用滤波反馈。
 轴交换回归分别检查 Roll/Pitch 的 PID 电机修正、CH8/10 对应关系，以及姿态角和目标值保持不变。
+CH13 测试检查上电零值、原始值符号、正负阶跃、重复样本、失效/超时恢复、单位转换和 60 字节帧尾位置；
+同时回归原 CH0~CH12 布局、PID 仍使用滤波反馈，以及独立三通道姿态发送接口。
 
-固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory gyro-kalman-verified`。
+固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory roll-raw-telemetry-verified`。
 在 Keil Rebuild 并烧录后，先拆桨验证 CH5/CH10、模式切换、回中和失联保护。

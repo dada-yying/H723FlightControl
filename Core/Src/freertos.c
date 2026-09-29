@@ -185,7 +185,8 @@ void StartDefaultTask(void *argument)
         rc_data.throttle,
         rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
         rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),
-        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f), rates_deg_s);
+        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f), rates_deg_s,
+        flight_data.roll_rate_raw_rad_s * (180.0f / 3.14159265358979323846f));
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */

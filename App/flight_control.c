@@ -127,6 +127,7 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     raw[0] = -imu->gyro_y;
     raw[1] = -imu->gyro_x;
     raw[2] = -imu->gyro_z;
+    g_flight_control_state.roll_rate_raw_rad_s = raw[0];
     q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
     if (s_filter_initialized == 0U)
     {

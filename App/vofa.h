@@ -11,7 +11,8 @@ HAL_StatusTypeDef VOFA_SendAttitude(float roll_deg, float pitch_deg, float yaw_d
 HAL_StatusTypeDef VOFA_SendFlightTelemetry(float roll_deg, float pitch_deg, float yaw_deg,
                                            float throttle, float roll_target_deg,
                                            float pitch_target_deg, float yaw_rate_target_deg_s,
-                                           const float rates_deg_s[6]); /* R target/actual, P target/actual, Y target/actual */
+                                           const float rates_deg_s[6], /* R target/actual, P target/actual, Y target/actual */
+                                           float roll_rate_raw_deg_s); /* CH13: pre-filter body Roll. */
 
 #ifdef __cplusplus
 }

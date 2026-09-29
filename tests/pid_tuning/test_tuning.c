@@ -42,7 +42,7 @@ static void test_filter(void)
 {
     unsigned i;
     const float alpha = 0.001f / (1.0f / (6.283185307179586f * 50.0f) + 0.001f);
-    float held, covariance, gain, expected, decoded[13], rates[6];
+    float held, covariance, gain, expected, decoded[14], rates[6];
     double ref_x, ref_p, ref_gain;
     RcSbus_Init(); FlightControl_Init();
     memset(&test_imu,0,sizeof(test_imu));
@@ -135,10 +135,12 @@ static void test_filter(void)
     rates[0]=0; rates[1]=g_flight_control_state.roll_rate_rad_s*180/3.14159265358979323846f;
     rates[2]=0; rates[3]=g_flight_control_state.pitch_rate_rad_s*180/3.14159265358979323846f;
     rates[4]=0; rates[5]=g_flight_control_state.yaw_rate_rad_s*180/3.14159265358979323846f;
-    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates)==HAL_OK);
+    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates,
+        g_flight_control_state.roll_rate_raw_rad_s*180/3.14159265358979323846f)==HAL_OK);
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     near_value(decoded[8],rates[1]); near_value(decoded[10],rates[3]); near_value(decoded[12],rates[5]);
-    assert(test_uart_size==56);
+    near_value(decoded[13],5*180/3.14159265358979323846f);
+    assert(test_uart_size==60);
     puts("PASS: Kalman initialization, steady gain, steps, dt, duplicates, live Q/R, invalid pairs, recovery, PID and telemetry");
 }
 static void test_kalman_extremes(void)
@@ -176,7 +178,7 @@ static void test_rate_axis_mapping(void)
 {
     unsigned axis, i;
     const float rad_to_deg=180.0f/3.14159265358979323846f;
-    float correction, throttle, rates[6], decoded[13];
+    float correction, throttle, rates[6], decoded[14];
     FlightControlState_t state;
     for(axis=0;axis<2;axis++) {
         RcSbus_Init(); FlightControl_Init();
@@ -191,6 +193,7 @@ static void test_rate_axis_mapping(void)
         else g_flight_control_pid.rate_pitch.kp=0.1f;
         run(); FlightControl_GetState(&state);
         near_value(state.roll_rate_rad_s,-0.2f);  /* -gyro_y */
+        near_value(state.roll_rate_raw_rad_s,-0.2f);
         near_value(state.pitch_rate_rad_s,-0.3f); /* -gyro_x */
         near_value(state.yaw_rate_rad_s,0.4f);
         /* Euler mapping and outer-loop targets must not be swapped. */
@@ -215,7 +218,8 @@ static void test_rate_axis_mapping(void)
             test_imu.pitch*rad_to_deg,test_imu.yaw*rad_to_deg,throttle,
             g_rc_sbus_data.roll_target_rad*rad_to_deg,
             g_rc_sbus_data.pitch_target_rad*rad_to_deg,
-            g_rc_sbus_data.yaw_rate_target_rad_s*rad_to_deg,rates)==HAL_OK);
+            g_rc_sbus_data.yaw_rate_target_rad_s*rad_to_deg,rates,
+            state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
         memcpy(decoded,test_uart_bytes,sizeof(decoded));
         near_value(decoded[0],0.1f*rad_to_deg);
         near_value(decoded[1],-0.2f*rad_to_deg);
@@ -223,15 +227,82 @@ static void test_rate_axis_mapping(void)
         near_value(decoded[3],throttle);
         for(i=4;i<7;i++) near_value(decoded[i],0);
         for(i=0;i<6;i++) near_value(decoded[7+i],rates[i]);
-        assert(test_uart_size==56 && test_uart_timeout==10);
+        near_value(decoded[13],-0.2f*rad_to_deg);
+        assert(test_uart_size==60 && test_uart_timeout==10);
         near_value(test_imu.gyro_x,0.3f); near_value(test_imu.gyro_y,0.2f);
     }
     puts("PASS: swapped Roll/Pitch feedback, independent PID motor corrections, unchanged Euler/targets and VOFA layout");
 }
+static void test_raw_roll_telemetry(void)
+{
+    const float rad_to_deg=180.0f/3.14159265358979323846f;
+    const float alpha=0.001f/(1.0f/(6.283185307179586f*50.0f)+0.001f);
+    float expected, rates[6], decoded[14];
+    FlightControlState_t state;
+
+    RcSbus_Init(); FlightControl_Init(); test_armed=0;
+    memset(&test_imu,0,sizeof(test_imu));
+    FlightControl_GetState(&state);
+    near_value(state.roll_rate_raw_rad_s,0);
+    test_imu.gyro_y=-99; run(); /* Invalid first sample is not published. */
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,0);
+    test_imu.gyro_valid=1; test_imu.gyro_y=-1; run();
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,1);
+    near_value(g_flight_control_state.roll_rate_rad_s,1);
+
+    test_imu.gyro_y=-3; run();
+    expected=1+2*alpha;
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,3);
+    near_value(g_flight_control_state.roll_rate_rad_s,expected);
+    test_imu.gyro_y=2; run();
+    expected+=alpha*(-2-expected);
+    FlightControl_GetState(&state);
+    near_value(state.roll_rate_raw_rad_s,-2);
+    near_value(state.roll_rate_rad_s,expected);
+
+    /* A changed buffer without a fresh count must not replace either value. */
+    test_imu.gyro_y=-99;
+    test_dwt.CYCCNT+=480000U; FlightControl_Run();
+    FlightControl_GetState(&state);
+    near_value(state.roll_rate_raw_rad_s,-2);
+    near_value(state.roll_rate_rad_s,expected);
+    rates[0]=state.roll_rate_target_rad_s*rad_to_deg;
+    rates[1]=state.roll_rate_rad_s*rad_to_deg;
+    rates[2]=state.pitch_rate_target_rad_s*rad_to_deg;
+    rates[3]=state.pitch_rate_rad_s*rad_to_deg;
+    rates[4]=state.yaw_rate_target_rad_s*rad_to_deg;
+    rates[5]=state.yaw_rate_rad_s*rad_to_deg;
+    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates,
+        state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
+    assert(test_uart_size==60 && test_uart_timeout==10);
+    memcpy(decoded,test_uart_bytes,sizeof(decoded));
+    near_value(decoded[8],expected*rad_to_deg);
+    near_value(decoded[13],-2*rad_to_deg);
+    assert(fabsf(decoded[8]-decoded[13])>1);
+    assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
+
+    test_imu.gyro_valid=0; run();
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,-2);
+    near_value(g_flight_control_state.roll_rate_rad_s,expected);
+    test_imu.gyro_valid=1; test_imu.gyro_y=-4; run();
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,4);
+    near_value(g_flight_control_state.roll_rate_rad_s,4);
+    test_tick+=11; FlightControl_OnTaskTimeout();
+    test_imu.gyro_y=-9; FlightControl_Run(); /* Old count after timeout. */
+    assert(!s_filter_initialized);
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,4);
+    near_value(g_flight_control_state.roll_rate_rad_s,4);
+    run(); /* Fresh recovery directly seeds both values. */
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,9);
+    near_value(g_flight_control_state.roll_rate_rad_s,9);
+    FlightControl_Init();
+    near_value(g_flight_control_state.roll_rate_raw_rad_s,0);
+    puts("PASS: raw Roll sign, steps, fresh-sample snapshot, invalid/timeout hold and recovery, CH13 units and frame");
+}
 int main(void)
 {
     unsigned i;
-    float rates[6]={11,12,13,14,15,16}, decoded[13];
+    float rates[6]={11,12,13,14,15,16}, decoded[14];
     RcSbus_Init(); FlightControl_Init(); test_imu.gyro_valid=1;
     frame(1696,352,0); frame(1696,352,0);
     assert(!g_rc_sbus_data.tuning_axis_valid);
@@ -282,16 +353,24 @@ int main(void)
     run(); assert(!g_flight_control_tuning.active); /* queued request accepted while locked */
     test_armed=1; test_tick+=11; FlightControl_OnTaskTimeout(); assert(!test_armed);
     near_value(s_roll_integral,0); near_value(s_pitch_integral,0); near_value(s_yaw_integral,0);
-    assert(VOFA_SendFlightTelemetry(1,2,3,4,5,6,7,rates)==HAL_OK);
-    assert(test_uart_size==56 && test_uart_timeout==10);
+    assert(VOFA_SendFlightTelemetry(1,2,3,4,5,6,7,rates,-17)==HAL_OK);
+    assert(test_uart_size==60 && test_uart_timeout==10);
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     for(i=0;i<7;i++) near_value(decoded[i],(float)i+1);
     for(i=0;i<6;i++) near_value(decoded[i+7],rates[i]);
-    assert(memcmp(test_uart_bytes+52,"\x00\x00\x80\x7f",4)==0);
-    assert(VOFA_SendChannels(rates,14)==HAL_ERROR);
+    near_value(decoded[13],-17);
+    assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
+    assert(VOFA_SendChannels(rates,15)==HAL_ERROR);
+    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,NULL,0)==HAL_ERROR);
+    assert(VOFA_SendAttitude(1,2,3)==HAL_OK);
+    assert(test_uart_size==16 && test_uart_timeout==10);
+    memcpy(decoded,test_uart_bytes,3U*sizeof(float));
+    for(i=0;i<3;i++) near_value(decoded[i],(float)i+1);
+    assert(memcmp(test_uart_bytes+12,"\x00\x00\x80\x7f",4)==0);
     puts("PASS: mapping, mode gate, fresh-frame recenter, axis isolation, failsafe, timeouts, telemetry");
     test_filter();
     test_kalman_extremes();
     test_rate_axis_mapping();
+    test_raw_roll_telemetry();
     return 0;
 }

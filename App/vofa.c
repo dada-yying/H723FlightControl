@@ -6,7 +6,7 @@
 
 #define VOFA_JUSTFLOAT_TAIL_SIZE       4U
 #define VOFA_UART_TIMEOUT_MS           10U
-#define VOFA_MAX_CHANNELS              13U
+#define VOFA_MAX_CHANNELS              14U
 
 static HAL_StatusTypeDef VOFA_SendChannels(const float *channels, uint32_t channel_count)
 {
@@ -33,14 +33,15 @@ HAL_StatusTypeDef VOFA_SendAttitude(float roll_deg, float pitch_deg, float yaw_d
 HAL_StatusTypeDef VOFA_SendFlightTelemetry(float roll_deg, float pitch_deg, float yaw_deg,
                                            float throttle, float roll_target_deg,
                                            float pitch_target_deg, float yaw_rate_target_deg_s,
-                                           const float rates_deg_s[6])
+                                           const float rates_deg_s[6], float roll_rate_raw_deg_s)
 {
-    float channels[13] = {
+    float channels[14] = {
         roll_deg, pitch_deg, yaw_deg, throttle,
         roll_target_deg, pitch_target_deg, yaw_rate_target_deg_s
     };
 
     if (rates_deg_s == NULL) return HAL_ERROR;
     (void)memcpy(&channels[7], rates_deg_s, 6U * sizeof(float));
-    return VOFA_SendChannels(channels, 13U);
+    channels[13] = roll_rate_raw_deg_s;
+    return VOFA_SendChannels(channels, 14U);
 }
