@@ -17,7 +17,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "app_main.h"
-#include "atom_imu.h"
 #include "esc_pwm.h"
 #include "flight_control.h"
 #include "vofa.h"
@@ -157,7 +156,6 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  AtomImuData_t imu_data;
   RcSbusData_t rc_data;
   FlightControlState_t flight_data;
   float rates_deg_s[6];
@@ -168,7 +166,6 @@ void StartDefaultTask(void *argument)
   for (;;)
   {
     FDCAN3_UpdateDiagnostics();
-    AtomImu_GetData(&imu_data);
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
     rates_deg_s[0] = flight_data.roll_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
@@ -177,11 +174,11 @@ void StartDefaultTask(void *argument)
     rates_deg_s[3] = flight_data.pitch_rate_rad_s * (180.0f / 3.14159265358979323846f);
     rates_deg_s[4] = flight_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
     rates_deg_s[5] = flight_data.yaw_rate_rad_s * (180.0f / 3.14159265358979323846f);
-    /* IMU axes stay native; any airframe coordinate conversion belongs above this layer. */
+    /* Body attitude and rates come from the same controller snapshot. */
     (void)VOFA_SendFlightTelemetry(
-        imu_data.roll * (180.0f / 3.14159265358979323846f),
-        imu_data.pitch * (180.0f / 3.14159265358979323846f),
-        imu_data.yaw * (180.0f / 3.14159265358979323846f),
+        flight_data.roll_rad * (180.0f / 3.14159265358979323846f),
+        flight_data.pitch_rad * (180.0f / 3.14159265358979323846f),
+        flight_data.yaw_rad * (180.0f / 3.14159265358979323846f),
         rc_data.throttle,
         rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
         rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),

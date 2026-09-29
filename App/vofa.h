@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 HAL_StatusTypeDef VOFA_SendAttitude(float roll_deg, float pitch_deg, float yaw_deg);
+/* CH0..2: body attitude in degrees, supplied from FlightControl_GetState(). */
 HAL_StatusTypeDef VOFA_SendFlightTelemetry(float roll_deg, float pitch_deg, float yaw_deg,
                                            float throttle, float roll_target_deg,
                                            float pitch_target_deg, float yaw_rate_target_deg_s,

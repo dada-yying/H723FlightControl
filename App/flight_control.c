@@ -125,7 +125,7 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     /* Preserve the confirmed PID/telemetry signs and axis mapping.
      * CAN decoding and Euler-angle mapping remain unchanged. */
     raw[0] = -imu->gyro_y;
-    raw[1] = -imu->gyro_x;
+    raw[1] = imu->gyro_x; /* Pitch: nose-down rate positive. */
     raw[2] = -imu->gyro_z;
     g_flight_control_state.roll_rate_raw_rad_s = raw[0];
     q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
@@ -244,9 +244,11 @@ void FlightControl_Run(void)
     RcSbus_GetData(&rc);
     g_flight_control_state.dt_s = dt;
     g_flight_control_state.control_hz = (uint32_t)(1.0f / dt + 0.5f);
-    g_flight_control_state.roll_rad = -imu.roll;
-    g_flight_control_state.pitch_rad = imu.pitch;
-    g_flight_control_state.yaw_rad = imu.yaw;
+    /* Confirmed airframe attitude: right roll, nose down, right yaw positive.
+     * Keep native CAN fields intact; PID and telemetry share this mapping. */
+    g_flight_control_state.roll_rad = -imu.pitch;
+    g_flight_control_state.pitch_rad = imu.roll;
+    g_flight_control_state.yaw_rad = -imu.yaw;
     FlightControl_FilterGyro(&imu, dt);
     g_flight_control_state.imu_valid = (imu.gyro_valid != 0U) ? 1U : 0U;
     g_flight_control_state.rc_valid = (rc.valid != 0U && rc.failsafe == 0U) ? 1U : 0U;

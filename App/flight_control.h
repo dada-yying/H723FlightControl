@@ -34,9 +34,9 @@ typedef struct
     uint8_t armed;
     uint32_t control_hz;
     float dt_s;
-    float roll_rad;
-    float pitch_rad;
-    float yaw_rad;
+    float roll_rad;  /* Body attitude: -imu.pitch, right roll positive. */
+    float pitch_rad; /* Body attitude: +imu.roll, nose down positive. */
+    float yaw_rad;   /* Body attitude: -imu.yaw, right yaw positive. */
     float roll_rate_rad_s;
     float pitch_rate_rad_s;
     float yaw_rate_rad_s;
