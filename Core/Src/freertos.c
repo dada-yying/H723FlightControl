@@ -158,6 +158,7 @@ void StartDefaultTask(void *argument)
   /* USER CODE BEGIN StartDefaultTask */
   RcSbusData_t rc_data;
   FlightControlState_t flight_data;
+  EscPwmState_t esc_data;
   float rates_deg_s[6];
   TickType_t last_wake_time = xTaskGetTickCount();
   const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
@@ -168,6 +169,7 @@ void StartDefaultTask(void *argument)
     FDCAN3_UpdateDiagnostics();
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
+    EscPwm_GetState(&esc_data);
     rates_deg_s[0] = flight_data.roll_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
     rates_deg_s[1] = flight_data.roll_rate_rad_s * (180.0f / 3.14159265358979323846f);
     rates_deg_s[2] = flight_data.pitch_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
@@ -183,7 +185,10 @@ void StartDefaultTask(void *argument)
         rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
         rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),
         rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f), rates_deg_s,
-        flight_data.roll_rate_raw_rad_s * (180.0f / 3.14159265358979323846f));
+        flight_data.roll_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
+        flight_data.pitch_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
+        flight_data.yaw_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
+        esc_data.command);
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */

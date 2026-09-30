@@ -47,6 +47,8 @@ typedef struct
     uint32_t saturation_count;
     uint32_t imu_timeout_count;
     float roll_rate_raw_rad_s; /* Pre-filter body Roll (-gyro_y), telemetry only. */
+    float pitch_rate_raw_rad_s; /* Pre-filter body Pitch (+gyro_x). */
+    float yaw_rate_raw_rad_s; /* Pre-filter body Yaw (-gyro_z). */
 } FlightControlState_t;
 
 extern volatile FlightControlPidConfig_t g_flight_control_pid;

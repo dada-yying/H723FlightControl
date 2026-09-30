@@ -15,7 +15,7 @@
 #define FLIGHT_DEFAULT_DT_S 0.001f
 /* Nominal covariances: steady K matches the former 50 Hz LPF at 1 kHz.
  * These are response-matching defaults, not measured IMU noise statistics. */
-#define FLIGHT_FILTER_DEFAULT_Q 0.07510204f
+#define FLIGHT_FILTER_DEFAULT_Q 0.015f //原为 0.07510204f
 #define FLIGHT_FILTER_DEFAULT_R 1.0f
 #define FLIGHT_FILTER_MIN_NOISE 0.000001f
 #define FLIGHT_FILTER_MAX_NOISE 1000.0f
@@ -49,6 +49,7 @@ static uint8_t s_have_error;
 static uint32_t s_last_control_tick;
 static uint8_t s_output_saturated;
 
+/* 限幅函数 */
 static float FlightControl_Clamp(float value, float minimum, float maximum)
 {
     if (value < minimum) return minimum;
@@ -56,6 +57,7 @@ static float FlightControl_Clamp(float value, float minimum, float maximum)
     return value;
 }
 
+/* 角速度PID控制器 */
 static float FlightControl_RatePid(float target, float measured, float dt,
                                    const FlightControlPidAxis_t *pid,
                                    float *integral, float *last_error)
@@ -90,6 +92,7 @@ static void FlightControl_ResetController(void)
 
 /* Task-only scalar random-walk Kalman filters, rad/s. No attitude/bias fusion.
  * Each axis owns x/P; Q/R are shared. Independent of PID resets. */
+/* 卡尔曼滤波 */
 static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
 {
     float requested_q;
@@ -128,6 +131,8 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     raw[1] = imu->gyro_x; /* Pitch: nose-down rate positive. */
     raw[2] = -imu->gyro_z;
     g_flight_control_state.roll_rate_raw_rad_s = raw[0];
+    g_flight_control_state.pitch_rate_raw_rad_s = raw[1];
+    g_flight_control_state.yaw_rate_raw_rad_s = raw[2];
     q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
     if (s_filter_initialized == 0U)
     {
@@ -199,6 +204,7 @@ void FlightControl_SetTaskHandle(TaskHandle_t task_handle)
     s_flight_task_handle = task_handle;
 }
 
+/* 从ISR通知飞行控制任务 */
 void FlightControl_NotifyFromISR(void)
 {
     BaseType_t woken = pdFALSE;
@@ -209,6 +215,7 @@ void FlightControl_NotifyFromISR(void)
     }
 }
 
+/* 计算时间间隔 */
 static float FlightControl_DeltaSeconds(void)
 {
     uint32_t now = DWT->CYCCNT;
@@ -285,6 +292,7 @@ void FlightControl_Run(void)
     g_flight_control_tuning.waiting_center = (s_tuning_active != 0U) ? s_waiting_center : 0U;
     g_flight_control_tuning.input_rate_rad_s = rc.tuning_rate_rad_s;
 
+    /* 检查飞行控制状态，IMU无效、RC无效、failsafe、超时则清零目标 */
     if ((imu.gyro_valid == 0U) || (rc.valid == 0U) || (rc.failsafe != 0U) ||
         ((now - rc.last_valid_tick) >= 100U))
     {
@@ -330,6 +338,7 @@ void FlightControl_Run(void)
         g_flight_control_state.yaw_rate_target_rad_s = (s_selected_axis == RC_TUNING_YAW) ? target : 0.0f;
     }
 
+    /* 未解锁则清零PID状态变量 */
     if ((g_flight_control_state.armed == 0U) ||
         ((s_tuning_active != 0U) && (s_waiting_center != 0U)))
     {
@@ -354,6 +363,7 @@ void FlightControl_Run(void)
     }
 
     /* M1=left rear CCW, M2=right rear CW, M3=right front CCW, M4=left front CW. */
+    /* 四轴混控 */
     motor[0] = rc.throttle + pitch_output + roll_output + yaw_output;
     motor[1] = rc.throttle + pitch_output - roll_output - yaw_output;
     motor[2] = rc.throttle - pitch_output - roll_output + yaw_output;
@@ -375,6 +385,7 @@ void FlightControl_Run(void)
     g_flight_control_state.running = 1U;
 }
 
+/* IMU超时断流保护 */
 void FlightControl_OnTaskTimeout(void)
 {
     if ((HAL_GetTick() - s_last_control_tick) >= FLIGHT_IMU_TIMEOUT_MS)

@@ -14,13 +14,21 @@ uint8_t EscPwm_IsArmed(void) { return test_armed; }
 void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason)
 { (void)reason; test_armed=0; memset(test_motors,0,sizeof(test_motors)); }
 void EscPwm_SetMixedNormalized(const float p[4]) { memcpy(test_motors,p,sizeof(test_motors)); }
+/* Fix the reference response explicitly, without changing production defaults. */
+static void test_flight_init(void)
+{
+    FlightControl_Init();
+    g_flight_control_filter.q=0.07510204f;
+    g_flight_control_filter.r=1.0f;
+}
 static void near_value(float actual, float expected) { assert(fabsf(actual-expected)<0.0001f); }
 static void frame(uint16_t axis, uint16_t slider, uint8_t flags)
 {
     uint8_t bytes[25]={0};
     uint16_t channels[16]={0};
     unsigned c,b;
-    channels[0]=1008; channels[1]=1000; channels[2]=1022; channels[3]=992;
+    channels[0]=RC_SBUS_ROLL_CENTER; channels[1]=RC_SBUS_PITCH_CENTER;
+    channels[2]=1022; channels[3]=RC_SBUS_YAW_CENTER;
     channels[4]=axis; channels[9]=slider;
     bytes[0]=0x0f; bytes[23]=flags;
     for(c=0;c<16;c++) for(b=0;b<11;b++)
@@ -42,9 +50,9 @@ static void test_filter(void)
 {
     unsigned i;
     const float alpha = 0.001f / (1.0f / (6.283185307179586f * 50.0f) + 0.001f);
-    float held, covariance, gain, expected, decoded[14], rates[6];
+    float held, covariance, gain, expected, decoded[20], rates[6];
     double ref_x, ref_p, ref_gain;
-    RcSbus_Init(); FlightControl_Init();
+    RcSbus_Init(); test_flight_init();
     memset(&test_imu,0,sizeof(test_imu));
     test_armed=0; test_imu.gyro_valid=1;
     test_imu.gyro_x=-2; test_imu.gyro_y=-1; test_imu.gyro_z=3;
@@ -136,11 +144,14 @@ static void test_filter(void)
     rates[2]=0; rates[3]=g_flight_control_state.pitch_rate_rad_s*180/3.14159265358979323846f;
     rates[4]=0; rates[5]=g_flight_control_state.yaw_rate_rad_s*180/3.14159265358979323846f;
     assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates,
-        g_flight_control_state.roll_rate_raw_rad_s*180/3.14159265358979323846f)==HAL_OK);
+        g_flight_control_state.roll_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     near_value(decoded[8],rates[1]); near_value(decoded[10],rates[3]); near_value(decoded[12],rates[5]);
     near_value(decoded[13],5*180/3.14159265358979323846f);
-    assert(test_uart_size==60);
+    assert(test_uart_size==84);
     puts("PASS: Kalman initialization, steady gain, steps, dt, duplicates, live Q/R, invalid pairs, recovery, PID and telemetry");
 }
 static void test_kalman_extremes(void)
@@ -148,7 +159,7 @@ static void test_kalman_extremes(void)
     const float params[]={0.000001f,1000.0f};
     unsigned q_index,r_index,step,axis;
     for(q_index=0;q_index<2;q_index++) for(r_index=0;r_index<2;r_index++) {
-        RcSbus_Init(); FlightControl_Init(); test_armed=0;
+        RcSbus_Init(); test_flight_init(); test_armed=0;
         memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
         g_flight_control_filter.q=params[q_index];
         g_flight_control_filter.r=params[r_index];
@@ -170,7 +181,7 @@ static void test_kalman_extremes(void)
         }
     }
     FlightControl_Init();
-    near_value(g_flight_control_filter.q,0.07510204f);
+    near_value(g_flight_control_filter.q,FLIGHT_FILTER_DEFAULT_Q);
     near_value(g_flight_control_filter.r,1);
     puts("PASS: Kalman extreme Q/R and dt, finite nonnegative covariance, bounded gain, independent axes, boot defaults");
 }
@@ -178,10 +189,10 @@ static void test_rate_axis_mapping(void)
 {
     unsigned axis, i;
     const float rad_to_deg=180.0f/3.14159265358979323846f;
-    float correction, throttle, rates[6], decoded[14];
+    float correction, throttle, rates[6], decoded[20];
     FlightControlState_t state;
     for(axis=0;axis<2;axis++) {
-        RcSbus_Init(); FlightControl_Init();
+        RcSbus_Init(); test_flight_init();
         memset(&test_imu,0,sizeof(test_imu));
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
         test_imu.gyro_x=0.3f; test_imu.gyro_y=0.2f; test_imu.gyro_z=-0.4f;
@@ -219,7 +230,10 @@ static void test_rate_axis_mapping(void)
             g_rc_sbus_data.roll_target_rad*rad_to_deg,
             g_rc_sbus_data.pitch_target_rad*rad_to_deg,
             g_rc_sbus_data.yaw_rate_target_rad_s*rad_to_deg,rates,
-            state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
+            state.roll_rate_raw_rad_s*rad_to_deg,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
         memcpy(decoded,test_uart_bytes,sizeof(decoded));
         near_value(decoded[0],0.2f*rad_to_deg);
         near_value(decoded[1],0.1f*rad_to_deg);
@@ -228,7 +242,7 @@ static void test_rate_axis_mapping(void)
         for(i=4;i<7;i++) near_value(decoded[i],0);
         for(i=0;i<6;i++) near_value(decoded[7+i],rates[i]);
         near_value(decoded[13],-0.2f*rad_to_deg);
-        assert(test_uart_size==60 && test_uart_timeout==10);
+        assert(test_uart_size==84 && test_uart_timeout==10);
         near_value(test_imu.gyro_x,0.3f); near_value(test_imu.gyro_y,0.2f);
         near_value(test_imu.roll,0.1f); near_value(test_imu.pitch,-0.2f);
         near_value(test_imu.yaw,0.3f);
@@ -240,12 +254,12 @@ static void test_pitch_rate_damping(void)
     const float rad_to_deg=180.0f/3.14159265358979323846f;
     const float alpha=0.001f/(1.0f/(6.283185307179586f*50.0f)+0.001f);
     unsigned direction,step;
-    float sign,expected,throttle,correction,rates[6],decoded[14];
+    float sign,expected,throttle,correction,rates[6],decoded[20];
     FlightControlState_t state;
     /* Latest bench report: +gyro_x is nose-down rotation. Isolate the rate
      * loop (angle gains and rate I/D zero); M1/M2 rear, M3/M4 front. */
     for(direction=0;direction<2;direction++) {
-        RcSbus_Init(); FlightControl_Init();
+        RcSbus_Init(); test_flight_init();
         memset(&test_imu,0,sizeof(test_imu));
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
         test_imu.roll=0.12f; /* Pitch attitude mapping must not be inverted. */
@@ -274,13 +288,16 @@ static void test_pitch_rate_damping(void)
             rates[3]=state.pitch_rate_rad_s*rad_to_deg;
             assert(VOFA_SendFlightTelemetry(state.roll_rad*rad_to_deg,
                 state.pitch_rad*rad_to_deg,state.yaw_rad*rad_to_deg,
-                throttle,0,0,0,rates,state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
+                throttle,0,0,0,rates,state.roll_rate_raw_rad_s*rad_to_deg,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
             memcpy(decoded,test_uart_bytes,sizeof(decoded));
             near_value(decoded[1],0.12f*rad_to_deg);
             near_value(decoded[9],0);
             near_value(decoded[10],expected*rad_to_deg);
-            assert(test_uart_size==60 && test_uart_timeout==10);
-            assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
+            assert(test_uart_size==84 && test_uart_timeout==10);
+            assert(memcmp(test_uart_bytes+80,"\x00\x00\x80\x7f",4)==0);
         }
     }
     puts("PASS: Pitch +gyro_x damping, nose-down raises front M3/M4, nose-up raises rear M1/M2, filtered CH10 and attitude unchanged");
@@ -295,7 +312,7 @@ static void test_roll_attitude_restoring_motors(void)
      * Hold the tilt still (zero gyro), with zero RC Roll target, positive
      * gains and no I/D, so only the angle-feedback direction is exercised. */
     for(side=0;side<2;side++) {
-        RcSbus_Init(); FlightControl_Init();
+        RcSbus_Init(); test_flight_init();
         memset(&test_imu,0,sizeof(test_imu));
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
         test_imu.pitch=(side==0) ? 0.2f : -0.2f;
@@ -323,14 +340,14 @@ static void test_attitude_axis_mapping(void)
 {
     const float rad_to_deg=180.0f/3.14159265358979323846f;
     unsigned gain_case,axis,sign,i;
-    float body_angle, expected[3], target[3], rates[6], decoded[14];
+    float body_angle, expected[3], target[3], rates[6], decoded[20];
     FlightControlState_t state;
 
     /* Isolate each physical attitude axis, both signs, below/above rate clamp.
      * Locked motors must not suppress the observable outer-loop target. */
     for(gain_case=0;gain_case<2;gain_case++) for(axis=0;axis<3;axis++)
     for(sign=0;sign<2;sign++) {
-        RcSbus_Init(); FlightControl_Init(); test_armed=0;
+        RcSbus_Init(); test_flight_init(); test_armed=0;
         memset(test_motors,0,sizeof(test_motors));
         memset(&test_imu,0,sizeof(test_imu));
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
@@ -376,7 +393,10 @@ static void test_attitude_axis_mapping(void)
         assert(VOFA_SendFlightTelemetry(state.roll_rad*rad_to_deg,
             state.pitch_rad*rad_to_deg,state.yaw_rad*rad_to_deg,
             g_rc_sbus_data.throttle,0,0,0,rates,
-            state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
+            state.roll_rate_raw_rad_s*rad_to_deg,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
         memcpy(decoded,test_uart_bytes,sizeof(decoded));
         for(i=0;i<3;i++) near_value(decoded[i],expected[i]*rad_to_deg);
         near_value(decoded[3],g_rc_sbus_data.throttle);
@@ -386,8 +406,8 @@ static void test_attitude_axis_mapping(void)
             near_value(decoded[8+2*i],0);
         }
         near_value(decoded[13],0);
-        assert(test_uart_size==60 && test_uart_timeout==10);
-        assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
+        assert(test_uart_size==84 && test_uart_timeout==10);
+        assert(memcmp(test_uart_bytes+80,"\x00\x00\x80\x7f",4)==0);
     }
     puts("PASS: positive/negative independent attitude axes, outer-loop restoring signs and limits, locked outputs, CH0..2 snapshot units");
 }
@@ -395,10 +415,10 @@ static void test_raw_roll_telemetry(void)
 {
     const float rad_to_deg=180.0f/3.14159265358979323846f;
     const float alpha=0.001f/(1.0f/(6.283185307179586f*50.0f)+0.001f);
-    float expected, rates[6], decoded[14];
+    float expected, rates[6], decoded[20];
     FlightControlState_t state;
 
-    RcSbus_Init(); FlightControl_Init(); test_armed=0;
+    RcSbus_Init(); test_flight_init(); test_armed=0;
     memset(&test_imu,0,sizeof(test_imu));
     FlightControl_GetState(&state);
     near_value(state.roll_rate_raw_rad_s,0);
@@ -431,13 +451,16 @@ static void test_raw_roll_telemetry(void)
     rates[4]=state.yaw_rate_target_rad_s*rad_to_deg;
     rates[5]=state.yaw_rate_rad_s*rad_to_deg;
     assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates,
-        state.roll_rate_raw_rad_s*rad_to_deg)==HAL_OK);
-    assert(test_uart_size==60 && test_uart_timeout==10);
+        state.roll_rate_raw_rad_s*rad_to_deg,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
+    assert(test_uart_size==84 && test_uart_timeout==10);
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     near_value(decoded[8],expected*rad_to_deg);
     near_value(decoded[13],-2*rad_to_deg);
     assert(fabsf(decoded[8]-decoded[13])>1);
-    assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
+    assert(memcmp(test_uart_bytes+80,"\x00\x00\x80\x7f",4)==0);
 
     test_imu.gyro_valid=0; run();
     near_value(g_flight_control_state.roll_rate_raw_rad_s,-2);
@@ -453,15 +476,67 @@ static void test_raw_roll_telemetry(void)
     run(); /* Fresh recovery directly seeds both values. */
     near_value(g_flight_control_state.roll_rate_raw_rad_s,9);
     near_value(g_flight_control_state.roll_rate_rad_s,9);
-    FlightControl_Init();
+    test_flight_init();
     near_value(g_flight_control_state.roll_rate_raw_rad_s,0);
     puts("PASS: raw Roll sign, steps, fresh-sample snapshot, invalid/timeout hold and recovery, CH13 units and frame");
+}
+static void test_raw_pitch_yaw_telemetry(void)
+{
+    const float degrees=180.0f/3.14159265358979323846f;
+    float rates[6]={0}, decoded[20];
+    FlightControlState_t state;
+    unsigned axis, direction;
+    for (axis=0;axis<2;axis++) for (direction=0;direction<2;direction++) {
+        const float sign=direction ? -1.0f : 1.0f;
+        RcSbus_Init(); test_flight_init(); test_armed=0;
+        memset(&test_imu,0,sizeof(test_imu));
+        FlightControl_GetState(&state);
+        near_value(state.pitch_rate_raw_rad_s,0); near_value(state.yaw_rate_raw_rad_s,0);
+        test_imu.gyro_x=axis==0 ? sign : 0;
+        test_imu.gyro_z=axis==1 ? -sign : 0;
+        run(); /* No valid gyro yet. */
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,0);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,0);
+        test_imu.gyro_valid=1; run();
+        test_imu.gyro_x*=3; test_imu.gyro_z*=3; run();
+        FlightControl_GetState(&state);
+        near_value(state.pitch_rate_raw_rad_s,axis==0 ? sign*3 : 0);
+        near_value(state.yaw_rate_raw_rad_s,axis==1 ? sign*3 : 0);
+        assert(fabsf((axis==0 ? state.pitch_rate_rad_s : state.yaw_rate_rad_s)-sign*3)>0.1f);
+        assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,rates,0,
+            state.pitch_rate_raw_rad_s*degrees,state.yaw_rate_raw_rad_s*degrees,test_motors)==HAL_OK);
+        memcpy(decoded,test_uart_bytes,sizeof(decoded));
+        near_value(decoded[14],state.pitch_rate_raw_rad_s*degrees);
+        near_value(decoded[15],state.yaw_rate_raw_rad_s*degrees);
+        test_imu.gyro_x=99; test_imu.gyro_z=99;
+        FlightControl_Run(); /* Duplicate sample cannot replace raw values. */
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,state.pitch_rate_raw_rad_s);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,state.yaw_rate_raw_rad_s);
+        test_imu.gyro_valid=0; run();
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,state.pitch_rate_raw_rad_s);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,state.yaw_rate_raw_rad_s);
+        test_imu.gyro_valid=1; test_imu.gyro_x=-2; test_imu.gyro_z=4; run();
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,-2);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,-4);
+        near_value(g_flight_control_state.pitch_rate_rad_s,-2);
+        near_value(g_flight_control_state.yaw_rate_rad_s,-4);
+        test_tick+=11; FlightControl_OnTaskTimeout();
+        test_imu.gyro_x=5; test_imu.gyro_z=-6; FlightControl_Run();
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,-2);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,-4);
+        run();
+        near_value(g_flight_control_state.pitch_rate_raw_rad_s,5);
+        near_value(g_flight_control_state.yaw_rate_raw_rad_s,6);
+        near_value(g_flight_control_state.pitch_rate_rad_s,5);
+        near_value(g_flight_control_state.yaw_rate_rad_s,6);
+    }
+    puts("PASS: Pitch/Yaw raw signs, independent axes, steps, units, duplicate/invalid hold and timeout recovery");
 }
 int main(void)
 {
     unsigned i;
-    float rates[6]={11,12,13,14,15,16}, decoded[14];
-    RcSbus_Init(); FlightControl_Init(); test_imu.gyro_valid=1;
+    float rates[6]={11,12,13,14,15,16}, decoded[20];
+    RcSbus_Init(); test_flight_init(); test_imu.gyro_valid=1;
     frame(1696,352,0); frame(1696,352,0);
     assert(!g_rc_sbus_data.tuning_axis_valid);
     frame(1696,352,0);
@@ -511,15 +586,21 @@ int main(void)
     run(); assert(!g_flight_control_tuning.active); /* queued request accepted while locked */
     test_armed=1; test_tick+=11; FlightControl_OnTaskTimeout(); assert(!test_armed);
     near_value(s_roll_integral,0); near_value(s_pitch_integral,0); near_value(s_yaw_integral,0);
-    assert(VOFA_SendFlightTelemetry(1,2,3,4,5,6,7,rates,-17)==HAL_OK);
-    assert(test_uart_size==60 && test_uart_timeout==10);
+    assert(VOFA_SendFlightTelemetry(1,2,3,4,5,6,7,rates,-17,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_OK);
+    assert(test_uart_size==84 && test_uart_timeout==10);
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     for(i=0;i<7;i++) near_value(decoded[i],(float)i+1);
     for(i=0;i<6;i++) near_value(decoded[i+7],rates[i]);
     near_value(decoded[13],-17);
-    assert(memcmp(test_uart_bytes+56,"\x00\x00\x80\x7f",4)==0);
-    assert(VOFA_SendChannels(rates,15)==HAL_ERROR);
-    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,NULL,0)==HAL_ERROR);
+    assert(memcmp(test_uart_bytes+80,"\x00\x00\x80\x7f",4)==0);
+    assert(VOFA_SendChannels(rates,21)==HAL_ERROR);
+    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,NULL,0,
+        g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
+        g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,
+        test_motors)==HAL_ERROR);
     assert(VOFA_SendAttitude(1,2,3)==HAL_OK);
     assert(test_uart_size==16 && test_uart_timeout==10);
     memcpy(decoded,test_uart_bytes,3U*sizeof(float));
@@ -533,5 +614,6 @@ int main(void)
     test_roll_attitude_restoring_motors();
     test_attitude_axis_mapping();
     test_raw_roll_telemetry();
+    test_raw_pitch_yaw_telemetry();
     return 0;
 }

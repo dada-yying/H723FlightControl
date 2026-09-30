@@ -4,7 +4,9 @@ $testOutput = Join-Path ([IO.Path]::GetTempPath()) ('pid-tuning-' + [guid]::NewG
 New-Item -ItemType Directory -Path $testOutput | Out-Null
 Push-Location (Join-Path $PSScriptRoot '..\..')
 try {
-    $compileCommand = '"{0}" >nul && cl /nologo /TC /std:c11 /I tests\pid_tuning\stubs tests\pid_tuning\test_tuning.c /Fo:"{1}\test.o" /Fe:"{1}\test.exe" && "{1}\test.exe"' -f $VcVars, $testOutput
-    & cmd /d /s /c $compileCommand
-    if ($LASTEXITCODE -ne 0) { throw 'PID tuning host tests failed.' }
+    foreach ($testName in @('test_tuning', 'test_vofa_esc')) {
+        $compileCommand = '"{0}" >nul && cl /nologo /TC /std:c11 /I tests\pid_tuning\stubs tests\pid_tuning\{2}.c /Fo:"{1}\{2}.o" /Fe:"{1}\{2}.exe" && "{1}\{2}.exe"' -f $VcVars, $testOutput, $testName
+        & cmd /d /s /c $compileCommand
+        if ($LASTEXITCODE -ne 0) { throw "$testName host tests failed." }
+    }
 } finally { Pop-Location }

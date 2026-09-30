@@ -13,7 +13,7 @@ CH5 低位 Roll、中位 Yaw、高位 Pitch，`selected_axis` 分别为 0、1、
 仅所选轴运行 PID，另外两轴没有角速度稳定作用。
 PID 参数仍使用 `g_flight_control_pid.rate_roll/rate_pitch/rate_yaw` 的 kp、ki、kd。
 
-VOFA 使用 115200、8N1、JustFloat、100 Hz。CH0/1/2 统一显示控制器 Roll/Pitch/Yaw 姿态角，单位 °，Cube 仍用 CH0~CH2。
+VOFA 使用 230400、8N1、JustFloat、100 Hz；电脑端需同步设置 230400。CH0/1/2 统一显示控制器 Roll/Pitch/Yaw 姿态角，单位 °，Cube 仍用 CH0~CH2。
 姿态映射为 Roll = -imu.pitch、Pitch = +imu.roll、Yaw = -imu.yaw；右滚、机头下俯、右偏航为正。
 Roll 符号按最新台架反馈修正：相对最初直接发送原始 IMU 的版本，CH0 为原 CH1 取负，CH1 为原 CH0，CH2 为原 CH2 取负。
 姿态角与角速度从同一次 FlightControl_GetState 快照发送；不再单独读取原始 IMU 姿态。
@@ -21,7 +21,19 @@ Roll/Pitch 角度外环使用同一姿态状态，公式仍为 Kp × (目标角�
 锁定时仍计算外环目标，但不输出电机修正；Yaw 仍仅使用角速度环，不新增航向角控制。
 CH3~CH6 的油门、遥控目标含义不变，CAN 解包与 g_atom_imu_data 原始字段保持不变。
 CH7/8 为 Roll 目标/实际，CH9/10 为 Pitch 目标/实际，CH11/12 为 Yaw 目标/实际，单位均为 °/s。
-CH13 为 Roll 滤波前角速度（`-gyro_y`），单位 °/s；每帧 14 个 float 加 JustFloat 帧尾，共 60 字节。
+CH13 为 Roll 滤波前角速度（`-gyro_y`），单位 °/s；每帧 20 个 float 加 JustFloat 帧尾，共 84 字节。
+CH14 为 Pitch 滤波前角速度（`+gyro_x`），CH15 为 Yaw 滤波前角速度（`-gyro_z`），单位均为 °/s。
+CH16～CH19 依次为 M1 左后、M2 右后、M3 右前、M4 左前的归一化输出（0～1），从 EscPwm_GetState 的 command 读取。
+这是安全处理及限幅后的电机指令，不是实测转速；锁定显示 0，对应 1000 µs。
+三个原始角速度在滤波入口保存，通过同一次 FlightControl_GetState 获取；电调另取安全状态快照，二者不是原子同步采样。
+100 Hz、8N1 下需要 84000 bit/s：115200 占用 72.9%（单帧至少 7.29 ms），230400 占用 36.5%（至少 3.65 ms）。
+理论带宽不代表实际调度/USB 链路稳定；三轴原始角速度仍是 100 Hz 抽样，不是完整高频日志。
+
+Watch 观察 `g_vofa_tx_stats.success_count`、`failure_count`、`last_status`、`max_duration_ms`。
+计数覆盖实际 UART 调用（参数校验失败不计入），包括独立姿态发送；上电清零。HAL 返回值为 OK=0、ERROR=1、BUSY=2、TIMEOUT=3。
+耗时为 HAL 毫秒 tick 差，含任务抢占，最大值为上电以来峰值；发送失败不立即重试。
+拆桨验证至少 60 秒：成功计数约增加 6000，失败计数不增长，最大发送耗时应留有 10 ms 周期余量，飞控频率正常。
+通过此检查不能证明实机方向、带桨稳定性或没有高频噪声；串口侧还应核对完整帧和新增通道。
 CH7~CH13 的顺序和含义不变，串口发送超时仍为 10 ms；CH7/CH9 随修正后的姿态反馈重新计算。
 姿态与角速度均使用控制器机体轴向，不再混用原始姿态坐标与控制坐标。
 角速度映射为 Roll = -gyro_y、Pitch = +gyro_x、Yaw = -gyro_z，先映射再滤波。
@@ -42,15 +54,15 @@ Keil Watch 接口（旧 cutoff_hz / applied_cutoff_hz 已移除）：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `g_flight_control_filter.q` | 0.07510204 | 每 1 ms 的过程噪声协方差参数 |
+| `g_flight_control_filter.q` | 0.015 | 每 1 ms 的过程噪声协方差参数 |
 | `g_flight_control_filter.r` | 1.0 | 测量噪声协方差参数 |
-| `g_flight_control_filter.applied_q` | 0.07510204 | 实际生效 q，只读观察 |
+| `g_flight_control_filter.applied_q` | 0.015 | 实际生效 q，只读观察 |
 | `g_flight_control_filter.applied_r` | 1.0 | 实际生效 r，只读观察 |
 | `g_flight_control_filter.gain[0..2]` | 初始化前 0 | 最近更新增益，Roll/Pitch/Yaw；首样本直接采纳时为 1 |
 
 q/r 的名义协方差单位均为 (rad/s)^2；q 在每次更新按 dt/0.001 缩放。
-默认值是响应匹配参数，不是实测噪声标定。在 1 kHz 下稳态 K 约 0.239057，
-接近原 50 Hz 一阶低通；不保证默认设置比原低通更能抑制振荡。
+保留用户当前生产默认值 q=0.015、r=1，不是实测噪声标定。
+主机参考响应测试显式设 q=0.07510204、r=1，在 1 kHz 下稳态 K 约 0.239057，接近原 50 Hz 一阶低通系数；不修改生产默认值。
 固定采样周期、固定 Q/R 时，稳态响应仍相当于固定增益的一阶平滑。
 
 q、r 均只接受 1e-6～1e3 的有限值；任一非法则整组拒绝，继续使用上一组有效值。
@@ -80,10 +92,12 @@ Roll/Pitch 目标角速度分别为 -0.1/-0.05 rad/s。继续检查两轴内环�
 Pitch 角速度阻尼测试隔离角度外环（角度 Kp=0、角速度 Ki/Kd=0、正角速度 Kp），目标角速度为零：
 机头向下转动（gyro_x>0）时前方 M3/M4 增加、后方 M1/M2 减少；向上转动时相反。
 同时检查正负首样本、后续滤波更新、CH10 与 PID 反馈一致，以及 Pitch 姿态角符号和 CH1 不变。
-CH13 测试检查上电零值、原始值符号、正负阶跃、重复样本、失效/超时恢复、单位转换和 60 字节帧尾位置；
+CH13～CH15 测试检查上电零值、原始值符号、正负阶跃、重复样本、失效/超时恢复、单位转换和 84 字节帧尾位置；
 同时回归通道布局、PID 仍使用滤波反馈，以及独立三通道姿态发送接口。
+test_vofa_esc.c 编译真实 esc_pwm 和 vofa，检查四路限幅、PWM 映射、安全锁定后输出归零、串口错误统计和 tick 回绕。
+这些测试不执行默认任务的真实调度；默认任务快照来源和 100 Hz 周期另作源码检查与实机验证。
 
-固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory pitch-rate-sign-verified`。
+固件完整构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory vofa-20ch-verified`。
 在 Keil Rebuild 并烧录后，先拆桨、保持锁定，确认右滚使 CH0 增大、下俯使 CH1 增大、右偏航使 CH2 增大。
 零姿态目标、小的正外环增益下检查回正指令方向，再回归 CH5/CH10、模式切换、回中和失联保护。
 拆桨验证 Pitch 纯内环时先令角度增益为零、角速度目标为零，用小的正角速度 P 检查动态阻尼方向；
