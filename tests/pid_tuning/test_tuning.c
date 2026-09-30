@@ -7,6 +7,7 @@
 #include "../../App/vofa.c"
 
 static AtomImuData_t test_imu;
+void Blackbox_OnUartError(UART_HandleTypeDef *uart) { (void)uart; }
 static uint8_t test_armed;
 static float test_motors[4];
 void AtomImu_GetData(AtomImuData_t *p) { *p=test_imu; }

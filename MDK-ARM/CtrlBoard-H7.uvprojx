@@ -590,6 +590,11 @@
               <FilePath>../App/vofa.c</FilePath>
             </File>
             <File>
+              <FileName>blackbox.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/blackbox.c</FilePath>
+            </File>
+            <File>
               <FileName>rc_sbus.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/rc_sbus.c</FilePath>

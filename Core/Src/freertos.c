@@ -20,6 +20,7 @@
 #include "esc_pwm.h"
 #include "flight_control.h"
 #include "vofa.h"
+#include "blackbox.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
 #include "ws2812_ctrl.h"
@@ -159,7 +160,7 @@ void StartDefaultTask(void *argument)
   RcSbusData_t rc_data;
   FlightControlState_t flight_data;
   EscPwmState_t esc_data;
-  float rates_deg_s[6];
+  uint8_t frame[VOFA_FLIGHT_FRAME_SIZE];
   TickType_t last_wake_time = xTaskGetTickCount();
   const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
 
@@ -170,25 +171,8 @@ void StartDefaultTask(void *argument)
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
     EscPwm_GetState(&esc_data);
-    rates_deg_s[0] = flight_data.roll_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
-    rates_deg_s[1] = flight_data.roll_rate_rad_s * (180.0f / 3.14159265358979323846f);
-    rates_deg_s[2] = flight_data.pitch_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
-    rates_deg_s[3] = flight_data.pitch_rate_rad_s * (180.0f / 3.14159265358979323846f);
-    rates_deg_s[4] = flight_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f);
-    rates_deg_s[5] = flight_data.yaw_rate_rad_s * (180.0f / 3.14159265358979323846f);
-    /* Body attitude and rates come from the same controller snapshot. */
-    (void)VOFA_SendFlightTelemetry(
-        flight_data.roll_rad * (180.0f / 3.14159265358979323846f),
-        flight_data.pitch_rad * (180.0f / 3.14159265358979323846f),
-        flight_data.yaw_rad * (180.0f / 3.14159265358979323846f),
-        rc_data.throttle,
-        rc_data.roll_target_rad * (180.0f / 3.14159265358979323846f),
-        rc_data.pitch_target_rad * (180.0f / 3.14159265358979323846f),
-        rc_data.yaw_rate_target_rad_s * (180.0f / 3.14159265358979323846f), rates_deg_s,
-        flight_data.roll_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
-        flight_data.pitch_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
-        flight_data.yaw_rate_raw_rad_s * (180.0f / 3.14159265358979323846f),
-        esc_data.command);
+    VOFA_BuildFlightFrame(frame, &flight_data, &rc_data, &esc_data);
+    (void)VOFA_SendFrame(frame);
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
   /* USER CODE END StartDefaultTask */
@@ -237,6 +221,7 @@ void StartFlightControlTask(void *argument)
     if (received == 0U)
     {
       FlightControl_OnTaskTimeout();
+      Blackbox_Service();
       continue;
     }
     pending_gyro_frames += received;
@@ -244,6 +229,7 @@ void StartFlightControlTask(void *argument)
     {
       pending_gyro_frames = 0U;
       FlightControl_Run();
+      Blackbox_SendSnapshot();
     }
   }
 }

@@ -11,6 +11,7 @@ LR_IROM1 0x08000000 0x00100000 {
   }
   RW_IRAM2 0x24000000 0x00050000 {
     *(.sbus_dma)
+    *(.blackbox_dma)
     .ANY (+RW +ZI)
   }
 }

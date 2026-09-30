@@ -2,10 +2,20 @@
 #define VOFA_H
 
 #include "stm32h7xx_hal.h"
+#include "flight_control.h"
+#include "esc_pwm.h"
+
+#define VOFA_FLIGHT_FRAME_SIZE 84U
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Both UARTs use this exact snapshot-to-wire mapping; arguments must be non-NULL. */
+void VOFA_BuildFlightFrame(uint8_t frame[VOFA_FLIGHT_FRAME_SIZE],
+                          const FlightControlState_t *flight,
+                          const RcSbusData_t *rc, const EscPwmState_t *esc);
+HAL_StatusTypeDef VOFA_SendFrame(const uint8_t frame[VOFA_FLIGHT_FRAME_SIZE]);
 
 typedef struct
 {

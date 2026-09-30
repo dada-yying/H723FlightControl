@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "usart.h"
+#include "blackbox.h"
 
 #define RC_SBUS_FRAME_SIZE 25U
 #define RC_SBUS_FRAME_HEADER 0x0FU
@@ -347,6 +348,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    if (huart == &huart7) { Blackbox_OnUartError(huart); return; }
     if (huart != &huart5) return;
     /* HAL has aborted DMA. Request recovery in task context. */
     s_restart_pending = 1U;
