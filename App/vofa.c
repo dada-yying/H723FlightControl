@@ -6,7 +6,7 @@
 
 #define VOFA_JUSTFLOAT_TAIL_SIZE       4U
 #define VOFA_UART_TIMEOUT_MS           10U
-#define VOFA_MAX_CHANNELS              20U
+#define VOFA_MAX_CHANNELS              23U
 
 volatile VofaTxStats_t g_vofa_tx_stats;
 
@@ -49,7 +49,7 @@ HAL_StatusTypeDef VOFA_SendFrame(const uint8_t frame[VOFA_FLIGHT_FRAME_SIZE])
     return VOFA_Transmit(frame, VOFA_FLIGHT_FRAME_SIZE);
 }
 
-void VOFA_BuildFlightFrame(uint8_t frame[VOFA_FLIGHT_FRAME_SIZE],
+static void VOFA_BuildBase(uint8_t *frame,
                           const FlightControlState_t *flight,
                           const RcSbusData_t *rc, const EscPwmState_t *esc)
 {
@@ -65,7 +65,33 @@ void VOFA_BuildFlightFrame(uint8_t frame[VOFA_FLIGHT_FRAME_SIZE],
         flight->yaw_rate_raw_rad_s * degrees,
         esc->command[0], esc->command[1], esc->command[2], esc->command[3]
     };
-    VOFA_PackChannels(frame, channels, VOFA_MAX_CHANNELS);
+    memcpy(frame, channels, sizeof(channels));
+}
+
+void VOFA_BuildFlightFrame(uint8_t frame[VOFA_FLIGHT_FRAME_SIZE],
+                          const FlightControlState_t *flight,
+                          const RcSbusData_t *rc, const EscPwmState_t *esc,
+                          const OpticalFlowData_t *optical)
+{
+    const float extra[3] = {(float)optical->distance,
+        (float)optical->flow_vel_x, (float)optical->flow_vel_y};
+    VOFA_BuildBase(frame, flight, rc, esc);
+    VOFA_PackChannels(frame + 80, extra, 3U);
+}
+
+void VOFA_BuildBlackboxFrame(uint8_t frame[BLACKBOX_FLIGHT_FRAME_SIZE],
+                          const FlightControlState_t *flight,
+                          const RcSbusData_t *rc, const EscPwmState_t *esc,
+                          const OpticalFlowData_t *optical)
+{
+    uint32_t i, age = optical->has_sample ? optical->age_ms : UINT32_MAX;
+    static const uint8_t tail[4] = {0, 0, 0x80, 0x7F};
+    VOFA_BuildBase(frame, flight, rc, esc);
+    memset(frame + 80, 0, 27);
+    if (optical->has_sample) memcpy(frame + 80, optical->raw, 27);
+    for (i = 0; i < 4; ++i) frame[107 + i] = (uint8_t)(age >> (8U * i));
+    frame[111] = optical->has_sample ? 1U : 0U;
+    memcpy(frame + 112, tail, sizeof(tail));
 }
 
 HAL_StatusTypeDef VOFA_SendAttitude(float roll_deg, float pitch_deg, float yaw_deg)

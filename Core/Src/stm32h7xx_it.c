@@ -239,6 +239,9 @@ void UART7_IRQHandler(void)
   HAL_UART_IRQHandler(&huart7);
 }
 
+void DMA1_Stream2_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_usart10_rx); }
+void USART10_IRQHandler(void) { HAL_UART_IRQHandler(&huart10); }
+
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */

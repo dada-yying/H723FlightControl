@@ -4,17 +4,24 @@
 #include "stm32h7xx_hal.h"
 #include "flight_control.h"
 #include "esc_pwm.h"
+#include "optical_flow.h"
 
-#define VOFA_FLIGHT_FRAME_SIZE 84U
+#define VOFA_FLIGHT_FRAME_SIZE 96U
+#define BLACKBOX_FLIGHT_FRAME_SIZE 116U
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Both UARTs use this exact snapshot-to-wire mapping; arguments must be non-NULL. */
+/* Common CH0..19; different extensions for VOFA and binary blackbox. */
 void VOFA_BuildFlightFrame(uint8_t frame[VOFA_FLIGHT_FRAME_SIZE],
                           const FlightControlState_t *flight,
-                          const RcSbusData_t *rc, const EscPwmState_t *esc);
+                          const RcSbusData_t *rc, const EscPwmState_t *esc,
+                          const OpticalFlowData_t *optical);
+void VOFA_BuildBlackboxFrame(uint8_t frame[BLACKBOX_FLIGHT_FRAME_SIZE],
+                          const FlightControlState_t *flight,
+                          const RcSbusData_t *rc, const EscPwmState_t *esc,
+                          const OpticalFlowData_t *optical);
 HAL_StatusTypeDef VOFA_SendFrame(const uint8_t frame[VOFA_FLIGHT_FRAME_SIZE]);
 
 typedef struct

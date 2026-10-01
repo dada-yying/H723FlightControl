@@ -4,6 +4,7 @@
 
 #include "usart.h"
 #include "blackbox.h"
+#include "optical_flow.h"
 
 #define RC_SBUS_FRAME_SIZE 25U
 #define RC_SBUS_FRAME_HEADER 0x0FU
@@ -330,6 +331,7 @@ void RcSbus_RxBytesFromISR(const uint8_t *data, uint16_t length)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
+    if (huart == &huart10) { OpticalFlow_OnRxEvent(huart); return; }
     if (huart != &huart5) return;
     if (s_restart_pending != 0U) return;
     if (size > RC_SBUS_DMA_BUFFER_SIZE) size = RC_SBUS_DMA_BUFFER_SIZE;
@@ -348,6 +350,7 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    if (huart == &huart10) { OpticalFlow_OnError(huart); return; }
     if (huart == &huart7) { Blackbox_OnUartError(huart); return; }
     if (huart != &huart5) return;
     /* HAL has aborted DMA. Request recovery in task context. */

@@ -6,121 +6,71 @@
 #include "../../App/flight_control.c"
 #include "../../App/vofa.c"
 #include "../../App/blackbox.c"
-
-void AtomImu_GetData(AtomImuData_t *data) { memset(data,0,sizeof(*data)); }
-static void reset(void)
-{
-    assert(test_critical_depth==0);
-    test_dma_calls=test_abort_calls=test_clean_calls=0;
-    test_dma_status=test_abort_status=HAL_OK;
-    test_abort_immediate=0; test_clean_hook=NULL;
-    test_tick=100;
-    test_scb.CCR=SCB_CCR_DC_Msk;
-    RcSbus_Init(); FlightControl_Init();
-    assert(EscPwm_Init()==HAL_OK);
-    Blackbox_Init(HAL_OK);
+#include "../../App/optical_flow.c"
+void AtomImu_GetData(AtomImuData_t *p){memset(p,0,sizeof(*p));}
+static void advance(unsigned us){test_dwt.CYCCNT+=us*480U;test_tick+=us/1000U;}
+static void reset(void){
+    test_tick=100;test_dwt.CYCCNT=0;test_dma_calls=test_abort_calls=test_clean_calls=0;
+    test_dma_status=test_abort_status=HAL_OK;test_abort_immediate=0;test_clean_hook=NULL;test_scb.CCR=SCB_CCR_DC_Msk;
+    RcSbus_Init();FlightControl_Init();assert(EscPwm_Init()==HAL_OK);OpticalFlow_Init(HAL_OK);Blackbox_Init(HAL_OK);
 }
-static void inject_error(void) { huart7.ErrorCode=0x10; HAL_UART_ErrorCallback(&huart7); }
-static void near_value(float a,float b) { assert(fabsf(a-b)<0.0001f); }
-
-int main(void)
-{
-    uint8_t expected[84], held[96];
-    float decoded[20], rates[6];
-    FlightControlState_t flight;
-    RcSbusData_t rc;
-    EscPwmState_t esc;
-    const float degrees=180.0f/3.14159265358979323846f;
-    unsigned i;
-    reset();
-    g_flight_control_state.roll_rad=0.1f;
-    g_flight_control_state.pitch_rad=-0.2f;
-    g_flight_control_state.yaw_rad=0.3f;
-    g_flight_control_state.roll_rate_target_rad_s=0.4f;
-    g_flight_control_state.roll_rate_rad_s=0.5f;
-    g_flight_control_state.pitch_rate_target_rad_s=-0.6f;
-    g_flight_control_state.pitch_rate_rad_s=-0.7f;
-    g_flight_control_state.yaw_rate_target_rad_s=0.8f;
-    g_flight_control_state.yaw_rate_rad_s=0.9f;
-    g_flight_control_state.roll_rate_raw_rad_s=1.0f;
-    g_flight_control_state.pitch_rate_raw_rad_s=-1.1f;
-    g_flight_control_state.yaw_rate_raw_rad_s=1.2f;
-    g_rc_sbus_data.throttle=0.25f;
-    g_rc_sbus_data.roll_target_rad=0.13f;
-    g_rc_sbus_data.pitch_target_rad=-0.14f;
-    g_rc_sbus_data.yaw_rate_target_rad_s=0.15f;
-    /* Exercise real ESC low-throttle middle->high arming and output path. */
-    RcSbus_GetData(&rc); rc.valid=1; rc.throttle=0;
-    test_tick+=2000; rc.last_valid_tick=test_tick; rc.channel[6]=1000;
-    EscPwm_UpdateFromRc(&rc); rc.channel[6]=1696; EscPwm_UpdateFromRc(&rc);
-    assert(EscPwm_IsArmed());
-    { const float motors[4]={0.1f,0.2f,0.3f,0.4f}; EscPwm_SetMixedNormalized(motors); }
-    FlightControl_GetState(&flight); RcSbus_GetData(&rc); EscPwm_GetState(&esc);
-    VOFA_BuildFlightFrame(expected,&flight,&rc,&esc);
-    rates[0]=0.4f*degrees; rates[1]=0.5f*degrees;
-    rates[2]=-0.6f*degrees; rates[3]=-0.7f*degrees;
-    rates[4]=0.8f*degrees; rates[5]=0.9f*degrees;
-    assert(VOFA_SendFlightTelemetry(0.1f*degrees,-0.2f*degrees,0.3f*degrees,
-        0.25f,0.13f*degrees,-0.14f*degrees,0.15f*degrees,rates,
-        1.0f*degrees,-1.1f*degrees,1.2f*degrees,esc.command)==HAL_OK);
-    assert(memcmp(test_uart_bytes,expected,84)==0); /* Previous API has identical layout. */
-    assert(VOFA_SendFrame(expected)==HAL_OK);
-    Blackbox_SendSnapshot();
-    assert(test_dma_calls==1 && test_dma_size==84 && test_clean_calls==1 && test_clean_size==96);
-    assert(memcmp(test_dma_source,expected,84)==0 && memcmp(test_dma_source,test_uart_bytes,84)==0);
-    assert(g_blackbox_tx_stats.submitted_count==1 && g_blackbox_tx_stats.busy);
-    memcpy(held,test_dma_source,96);
-    g_flight_control_state.roll_rad=99; Blackbox_SendSnapshot();
-    assert(test_dma_calls==1 && g_blackbox_tx_stats.busy_drop_count==1);
-    assert(memcmp(held,test_dma_source,96)==0);
-    HAL_UART_TxCpltCallback(&huart1); assert(g_blackbox_tx_stats.busy);
-    HAL_UART_TxCpltCallback(&huart7); assert(!g_blackbox_tx_stats.busy);
-    assert(g_blackbox_tx_stats.completed_count==1);
-    EscPwm_Disarm(); Blackbox_SendSnapshot();
-    memcpy(decoded,test_dma_source,84-4);
-    for(i=16;i<20;i++) near_value(decoded[i],0);
-    assert(test_dma_calls==2); HAL_UART_TxCpltCallback(&huart7);
-    test_scb.CCR=0; Blackbox_SendSnapshot(); assert(test_clean_calls==2);
-    puts("PASS: identical 20-channel UART1/UART7 frames, locked zero, DMA ownership, cache cleaning, TC release");
-
-    reset(); Blackbox_SendSnapshot(); test_tick+=5; Blackbox_Service();
-    assert(test_abort_calls==0); test_tick++; Blackbox_Service();
-    assert(test_abort_calls==1 && g_blackbox_tx_stats.state==BLACKBOX_ABORTING);
-    assert(g_blackbox_tx_stats.timeout_count==1);
-    HAL_UART_TxCpltCallback(&huart7); assert(g_blackbox_tx_stats.state==BLACKBOX_ABORTING);
-    Blackbox_SendSnapshot(); assert(test_dma_calls==1 && test_abort_calls==1);
-    HAL_UART_AbortTransmitCpltCallback(&huart7); Blackbox_SendSnapshot();
-    assert(test_dma_calls==2);
-    inject_error(); assert(!s_restart_pending);
-    assert(g_blackbox_tx_stats.state==BLACKBOX_RECOVER && g_blackbox_tx_stats.last_uart_error==0x10);
-    test_abort_immediate=1; Blackbox_Service();
-    assert(g_blackbox_tx_stats.state==BLACKBOX_IDLE);
-    HAL_UART_ErrorCallback(&huart5);
-    assert(s_restart_pending && g_blackbox_tx_stats.state==BLACKBOX_IDLE);
-    puts("PASS: >5ms timeout, async/synchronous abort recovery, late TC ignored, UART5 error routing preserved");
-
-    reset(); Blackbox_SendSnapshot(); inject_error(); Blackbox_Service();
-    test_tick+=6; Blackbox_Service(); assert(g_blackbox_tx_stats.disabled);
-    HAL_UART_AbortTransmitCpltCallback(&huart7); HAL_UART_TxCpltCallback(&huart7);
-    Blackbox_SendSnapshot(); assert(test_dma_calls==1 && g_blackbox_tx_stats.disabled);
-    reset(); Blackbox_SendSnapshot(); inject_error(); test_abort_status=HAL_ERROR; Blackbox_Service();
-    assert(g_blackbox_tx_stats.disabled);
-    reset(); Blackbox_Init(HAL_ERROR); Blackbox_SendSnapshot();
-    assert(test_dma_calls==0 && g_blackbox_tx_stats.disabled && !g_blackbox_tx_stats.initialized);
-    for(i=0;i<3;i++) {
-        const HAL_StatusTypeDef errors[3]={HAL_BUSY,HAL_ERROR,HAL_TIMEOUT};
-        reset(); test_dma_status=errors[i]; Blackbox_SendSnapshot();
-        assert(test_dma_calls==1 && g_blackbox_tx_stats.submitted_count==0);
-        assert(g_blackbox_tx_stats.last_status==errors[i]);
-        assert(g_blackbox_tx_stats.state==BLACKBOX_RECOVER);
-        test_abort_immediate=1; Blackbox_Service(); test_dma_status=HAL_OK; Blackbox_SendSnapshot();
-        assert(test_dma_calls==2 && g_blackbox_tx_stats.submitted_count==1);
+static void definition(void){unsigned guard=0;while(!s_schema_ready){Blackbox_Service();if(g_blackbox_tx_stats.busy)HAL_UART_TxCpltCallback(&huart7);advance(20000);assert(++guard<100);} }
+static void inject_error(void){huart7.ErrorCode=0x10;HAL_UART_ErrorCallback(&huart7);}
+int main(int argc,char **argv){
+    unsigned i,calls;uint8_t held[512],expected[96];FILE *out=NULL;
+    FlightControlState_t flight;RcSbusData_t rc;EscPwmState_t esc;OpticalFlowData_t optical;
+    reset();assert(s_schema_size<=8192 && s_payload_size<=484);
+    definition();
+    g_flight_control_state.roll_rad=.1f;g_flight_control_state.pitch_rate_raw_rad_s=-1.1f;
+    FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);OpticalFlow_GetData(&optical);
+    VOFA_BuildFlightFrame(expected,&flight,&rc,&esc,&optical);VOFA_SendFrame(expected);
+    Blackbox_SendSnapshot();assert(sbb_valid(test_dma_source,test_dma_size) && test_dma_source[5]==SBB_DATA);
+    assert(test_dma_size==s_payload_size+28 && test_clean_size==512);
+    assert(!memcmp(test_dma_source+16,test_dma_source+24+112,8));
+    Blackbox_Sample(held,0x123456789abcdef0ULL);
+    assert(sbb_u32(held+112)==0x9abcdef0U && sbb_u32(held+116)==0x12345678U);
+    assert(!memcmp(expected,test_dma_source+24,80) && test_uart_size==96);
+    for(i=0;i<4;i++){float motor;memcpy(&motor,test_dma_source+24+64+4*i,4);assert(motor==0);}
+    memcpy(held,test_dma_source,512);calls=test_dma_calls;
+    Blackbox_SendSnapshot();assert(test_dma_calls==calls && !memcmp(held,test_dma_source,512));
+    HAL_UART_TxCpltCallback(&huart1);assert(g_blackbox_tx_stats.busy);
+    HAL_UART_TxCpltCallback(&huart7);Blackbox_SendSnapshot();assert(test_dma_calls==calls && g_blackbox_tx_stats.bandwidth_skip_count);
+    advance(2000);Blackbox_SendSnapshot();assert(test_dma_calls==calls+1);
+    advance(6000);Blackbox_Service();assert(test_abort_calls==1 && g_blackbox_tx_stats.state==BLACKBOX_ABORTING);
+    HAL_UART_TxCpltCallback(&huart7);assert(g_blackbox_tx_stats.state==BLACKBOX_ABORTING);
+    HAL_UART_AbortTransmitCpltCallback(&huart7);inject_error();assert(!s_restart_pending);
+    test_abort_immediate=1;Blackbox_Service();assert(g_blackbox_tx_stats.state==BLACKBOX_IDLE);
+    HAL_UART_ErrorCallback(&huart5);assert(s_restart_pending);s_restart_pending=0;
+    HAL_UART_ErrorCallback(&huart10);assert(g_blackbox_tx_stats.state==BLACKBOX_IDLE);
+    reset();Blackbox_Service();advance(6000);Blackbox_Service();advance(6000);Blackbox_Service();assert(g_blackbox_tx_stats.disabled);
+    reset();Blackbox_Init(HAL_ERROR);Blackbox_SendSnapshot();assert(!test_dma_calls && g_blackbox_tx_stats.disabled);
+    for(i=HAL_ERROR;i<=HAL_TIMEOUT;i++){
+        reset();test_dma_status=(HAL_StatusTypeDef)i;Blackbox_Service();assert(g_blackbox_tx_stats.state==BLACKBOX_RECOVER);
+        test_abort_immediate=1;Blackbox_Service();assert(!s_schema_ready && s_schema_offset==0);
     }
-    reset(); test_tick=0xfffffffeU; Blackbox_SendSnapshot(); test_tick=4; Blackbox_Service();
-    assert(test_abort_calls==1);
-    reset(); test_clean_hook=inject_error; Blackbox_SendSnapshot();
-    assert(test_dma_calls==0 && g_blackbox_tx_stats.state==BLACKBOX_RECOVER);
-    assert(test_critical_depth==0);
-    puts("PASS: initialization/abort failure isolation, stuck abort latch, submission errors, tick wrap and snapshot error race");
-    return 0;
+    reset();test_clean_hook=inject_error;Blackbox_Service();assert(!test_dma_calls && g_blackbox_tx_stats.state==BLACKBOX_RECOVER);
+    /* Maximum packet bandwidth: at 1 kHz no more than 250 Hz with integer
+       control slots; minimum interval is ceil(512/150000 seconds)=3414 us. */
+    reset();definition();s_payload_size=484;calls=0;
+    for(i=0;i<1000;i++){unsigned before=test_dma_calls;Blackbox_SendSnapshot();
+        if(test_dma_calls!=before && test_dma_source[5]==SBB_DATA)calls++;
+        if(g_blackbox_tx_stats.busy)HAL_UART_TxCpltCallback(&huart7);advance(1000);}
+    assert(calls<=250 && calls>=240);
+    /* Export real sender packets. No modifications to F407/converter between
+       baseline and -DBLACKBOX_TEST_EXTRA_FIELDS build. */
+    reset();if(argc>1){out=fopen(argv[1],"wb");assert(out);}
+    for(i=0;i<3000;i++) {
+        unsigned before=test_dma_calls;
+        g_flight_control_state.roll_rad=.25f;
+        Blackbox_SendSnapshot();
+        if(test_dma_calls!=before && g_blackbox_tx_stats.state==BLACKBOX_SENDING){
+            assert(sbb_valid(test_dma_source,test_dma_size));
+            if(out)assert(fwrite(test_dma_source,1,test_dma_size,out)==test_dma_size);
+            HAL_UART_TxCpltCallback(&huart7);
+        }
+        advance(1000);
+    }
+    assert(g_blackbox_tx_stats.data_completed_count>1200 && g_blackbox_tx_stats.schema_completed_count>10);
+    if(out)fclose(out);
+    puts("PASS SBB3 schema, DMA ownership/recovery, bandwidth cap, unchanged VOFA, live field extension fixture");return 0;
 }

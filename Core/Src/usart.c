@@ -30,6 +30,35 @@ DMA_HandleTypeDef hdma_uart5_rx;
 UART_HandleTypeDef huart7;
 DMA_HandleTypeDef hdma_uart7_tx;
 static HAL_StatusTypeDef s_uart7_msp_status;
+UART_HandleTypeDef huart10;
+DMA_HandleTypeDef hdma_usart10_rx;
+static HAL_StatusTypeDef s_usart10_msp_status;
+
+HAL_StatusTypeDef MX_USART10_Init(void)
+{
+  HAL_StatusTypeDef status;
+  s_usart10_msp_status = HAL_OK;
+  huart10.Instance = USART10;
+  huart10.Init.BaudRate = 115200;
+  huart10.Init.WordLength = UART_WORDLENGTH_8B;
+  huart10.Init.StopBits = UART_STOPBITS_1;
+  huart10.Init.Parity = UART_PARITY_NONE;
+  huart10.Init.Mode = UART_MODE_TX_RX;
+  huart10.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart10.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart10.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart10.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart10.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  status = HAL_UART_Init(&huart10);
+  if (s_usart10_msp_status != HAL_OK) status = s_usart10_msp_status;
+  if (status == HAL_OK) status = HAL_UARTEx_DisableFifoMode(&huart10);
+  if (status != HAL_OK)
+  {
+    HAL_NVIC_DisableIRQ(USART10_IRQn);
+    HAL_NVIC_DisableIRQ(DMA1_Stream2_IRQn);
+  }
+  return status;
+}
 
 HAL_StatusTypeDef MX_UART7_Init(void)
 {
@@ -140,6 +169,43 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+  if(uartHandle->Instance==USART10)
+  {
+    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART10;
+    PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16910CLKSOURCE_D2PCLK2;
+    s_usart10_msp_status = HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct);
+    if (s_usart10_msp_status != HAL_OK) return;
+    __HAL_RCC_USART10_CLK_ENABLE();
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_DMA1_CLK_ENABLE();
+    GPIO_InitStruct.Pin = GPIO_PIN_2;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_USART10;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Alternate = GPIO_AF11_USART10;
+    HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+    hdma_usart10_rx.Instance = DMA1_Stream2;
+    hdma_usart10_rx.Init.Request = DMA_REQUEST_USART10_RX;
+    hdma_usart10_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    hdma_usart10_rx.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_usart10_rx.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_usart10_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart10_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    hdma_usart10_rx.Init.Mode = DMA_CIRCULAR;
+    hdma_usart10_rx.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_usart10_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    s_usart10_msp_status = HAL_DMA_Init(&hdma_usart10_rx);
+    if (s_usart10_msp_status != HAL_OK) return;
+    __HAL_LINKDMA(uartHandle, hdmarx, hdma_usart10_rx);
+    HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+    HAL_NVIC_SetPriority(USART10_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(USART10_IRQn);
+    return;
+  }
   if(uartHandle->Instance==UART7)
   {
     /* Same shared clock source as UART5: 120 MHz / 2 Mbps = BRR 60. */
@@ -255,6 +321,15 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
 void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
 {
+  if(uartHandle->Instance==USART10)
+  {
+    HAL_NVIC_DisableIRQ(USART10_IRQn);
+    HAL_NVIC_DisableIRQ(DMA1_Stream2_IRQn);
+    if (uartHandle->hdmarx != NULL) HAL_DMA_DeInit(uartHandle->hdmarx);
+    HAL_GPIO_DeInit(GPIOE, GPIO_PIN_2 | GPIO_PIN_3);
+    __HAL_RCC_USART10_CLK_DISABLE();
+    return;
+  }
   if(uartHandle->Instance==UART7)
   {
     HAL_NVIC_DisableIRQ(UART7_IRQn);

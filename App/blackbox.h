@@ -19,6 +19,8 @@ typedef struct {
     uint32_t abort_count;
     HAL_StatusTypeDef last_status;
     uint32_t last_uart_error;
+    uint32_t schema_submitted_count, schema_completed_count, data_completed_count;
+    uint32_t bandwidth_skip_count, record_hz, schema_id, payload_size, config_error;
 } BlackboxTxStats_t;
 extern volatile BlackboxTxStats_t g_blackbox_tx_stats;
 void Blackbox_Init(HAL_StatusTypeDef uart_init_status);

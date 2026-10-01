@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "../../App/rc_sbus.c"
+#include "../../App/optical_flow.c"
 #include "../../App/flight_control.c"
 #include "../../App/vofa.c"
 
@@ -597,7 +598,7 @@ int main(void)
     for(i=0;i<6;i++) near_value(decoded[i+7],rates[i]);
     near_value(decoded[13],-17);
     assert(memcmp(test_uart_bytes+80,"\x00\x00\x80\x7f",4)==0);
-    assert(VOFA_SendChannels(rates,21)==HAL_ERROR);
+    assert(VOFA_SendChannels(rates,24)==HAL_ERROR);
     assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,NULL,0,
         g_flight_control_state.pitch_rate_raw_rad_s*180/3.14159265358979323846f,
         g_flight_control_state.yaw_rate_raw_rad_s*180/3.14159265358979323846f,

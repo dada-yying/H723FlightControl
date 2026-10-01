@@ -595,6 +595,11 @@
               <FilePath>../App/blackbox.c</FilePath>
             </File>
             <File>
+              <FileName>optical_flow.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/optical_flow.c</FilePath>
+            </File>
+            <File>
               <FileName>rc_sbus.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/rc_sbus.c</FilePath>

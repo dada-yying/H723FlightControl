@@ -25,6 +25,9 @@ static uint32_t test_dma_calls, test_abort_calls, test_clean_calls, test_clean_s
 static uint8_t *test_dma_source;
 static uint16_t test_dma_size;
 static uint8_t test_abort_immediate;
+static uint32_t test_rx_remaining;
+static HAL_StatusTypeDef test_rx_status = HAL_OK, test_rx_abort_status = HAL_OK;
+#define __HAL_DMA_GET_COUNTER(a) test_rx_remaining
 static void (*test_clean_hook)(void);
 void HAL_UART_AbortTransmitCpltCallback(UART_HandleTypeDef *uart);
 #define __DSB() ((void)0)
@@ -38,8 +41,8 @@ static void SCB_InvalidateDCache_by_Addr(uint32_t *p, uint32_t n) { (void)p; (vo
 static void SCB_CleanDCache_by_Addr(uint32_t *p, uint32_t n)
 { (void)p; test_clean_calls++; test_clean_size=n; if(test_clean_hook) test_clean_hook(); }
 static HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *u, uint8_t *p, uint32_t n)
-{ (void)u; (void)p; (void)n; return HAL_OK; }
-static HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u) { (void)u; return HAL_OK; }
+{ (void)u; (void)p; test_rx_remaining=n; return test_rx_status; }
+static HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u) { (void)u; return test_rx_abort_status; }
 static HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, const uint8_t *p, uint16_t n, uint32_t timeout)
 { (void)u; memcpy(test_uart_bytes, p, n); test_uart_size=n; test_uart_timeout=timeout;
   test_uart_calls++; test_tick+=test_uart_duration_ms; return test_uart_status; }

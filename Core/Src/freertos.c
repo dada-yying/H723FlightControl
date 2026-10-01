@@ -21,6 +21,8 @@
 #include "flight_control.h"
 #include "vofa.h"
 #include "blackbox.h"
+#include "optical_flow.h"
+#include "usart.h"
 #include "fdcan.h"
 #include "rc_sbus.h"
 #include "ws2812_ctrl.h"
@@ -54,6 +56,11 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 
 osThreadId_t rcTaskHandle;
+osThreadId_t opticalFlowTaskHandle;
+const osThreadAttr_t opticalFlowTask_attributes = {
+  .name = "OpticalFlowTask", .stack_size = 1024,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 const osThreadAttr_t rcTask_attributes = {
   .name = "RcTask",
   .stack_size = 128 * 4,
@@ -81,6 +88,7 @@ const osThreadAttr_t ws2812_task_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
+void StartOpticalFlowTask(void *argument);
 void StartRcTask(void *argument);
 void StartFlightControlTask(void *argument);
 
@@ -92,6 +100,8 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   * @retval None
   */
 void MX_FREERTOS_Init(void) {
+  /* Optional sensor: failure does not prevent flight tasks from starting. */
+  OpticalFlow_Init(MX_USART10_Init());
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -118,6 +128,9 @@ void MX_FREERTOS_Init(void) {
   ws2812TaskHandle = osThreadNew(WS2812_ColorTask, NULL, &ws2812_task_attributes);
   rcTaskHandle = osThreadNew(StartRcTask, NULL, &rcTask_attributes);
   flightControlTaskHandle = osThreadNew(StartFlightControlTask, NULL, &flightControlTask_attributes);
+  opticalFlowTaskHandle = osThreadNew(StartOpticalFlowTask, NULL, &opticalFlowTask_attributes);
+  OpticalFlow_SetTaskHandle((TaskHandle_t)opticalFlowTaskHandle);
+  if (opticalFlowTaskHandle == NULL) OpticalFlow_Init(HAL_ERROR);
 
   /* USER CODE BEGIN RTOS_THREADS */
   if (defaultTaskHandle == NULL)
@@ -160,6 +173,7 @@ void StartDefaultTask(void *argument)
   RcSbusData_t rc_data;
   FlightControlState_t flight_data;
   EscPwmState_t esc_data;
+  OpticalFlowData_t optical_data;
   uint8_t frame[VOFA_FLIGHT_FRAME_SIZE];
   TickType_t last_wake_time = xTaskGetTickCount();
   const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
@@ -171,7 +185,8 @@ void StartDefaultTask(void *argument)
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
     EscPwm_GetState(&esc_data);
-    VOFA_BuildFlightFrame(frame, &flight_data, &rc_data, &esc_data);
+    OpticalFlow_GetData(&optical_data);
+    VOFA_BuildFlightFrame(frame, &flight_data, &rc_data, &esc_data, &optical_data);
     (void)VOFA_SendFrame(frame);
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
   }
@@ -235,6 +250,20 @@ void StartFlightControlTask(void *argument)
 }
 
 /* Private application code --------------------------------------------------*/
+void StartOpticalFlowTask(void *argument)
+{
+  (void)argument;
+  for (;;)
+  {
+    OpticalFlow_ProcessPending();
+    g_optical_flow_stats.heap_free_bytes = xPortGetFreeHeapSize();
+    g_optical_flow_stats.heap_min_free_bytes = xPortGetMinimumEverFreeHeapSize();
+    g_optical_flow_stats.optical_stack_free_words = uxTaskGetStackHighWaterMark(NULL);
+    g_optical_flow_stats.default_stack_free_words = uxTaskGetStackHighWaterMark((TaskHandle_t)defaultTaskHandle);
+    g_optical_flow_stats.flight_stack_free_words = uxTaskGetStackHighWaterMark((TaskHandle_t)flightControlTaskHandle);
+    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
+  }
+}
 /* USER CODE BEGIN Application */
 
 /* USER CODE END Application */
