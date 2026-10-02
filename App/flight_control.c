@@ -197,6 +197,11 @@ void FlightControl_Init(void)
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    g_flight_control_pid.angle_roll.kp = 3.5;
+    g_flight_control_pid.angle_pitch.kp = 3.5;
+    g_flight_control_pid.rate_roll.kp = 0.15;
+    g_flight_control_pid.rate_pitch.kp = 0.15;
+    g_flight_control_pid.rate_yaw.kp = 0.3;
 }
 
 void FlightControl_SetTaskHandle(TaskHandle_t task_handle)

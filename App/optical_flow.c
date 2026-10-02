@@ -12,6 +12,7 @@ static volatile uint32_t of_head, of_tail;
 static uint32_t of_dma_pos, of_retry_tick;
 static volatile uint8_t of_restart;
 static uint8_t of_retry_wait;
+static uint8_t of_it_byte;
 static TaskHandle_t of_task;
 static uint8_t of_parse[71];
 static uint32_t of_parse_ticks[71];
@@ -22,6 +23,54 @@ static uint32_t of_clock_tick;
 static uint64_t of_clock_ms, of_sample_ms;
 volatile OpticalFlowData_t g_optical_flow_data;
 volatile OpticalFlowStats_t g_optical_flow_stats;
+volatile OpticalFlowDiag_t g_optical_flow_diag;
+static uint8_t of_diag_rx_seen, of_diag_task_seen, of_diag_seq_seen;
+
+/* Task-only observation, before publication. Raw latches survive later zero
+ * frames and UART recovery; only OpticalFlow_Init clears them. */
+static void OF_DiagFrame(const OpticalFlowData_t *d)
+{
+    uint32_t i;
+    uint32_t mode = (g_optical_flow_diag.rx_mode == OPTICAL_FLOW_RX_IT) ?
+                    OPTICAL_FLOW_RX_IT : OPTICAL_FLOW_RX_DMA;
+    uint16_t raw_x = (uint16_t)((uint16_t)d->raw[18] | ((uint16_t)d->raw[19] << 8));
+    uint16_t raw_y = (uint16_t)((uint16_t)d->raw[20] | ((uint16_t)d->raw[21] << 8));
+    g_optical_flow_diag.frame_capture_seq++;
+    __DMB();
+    g_optical_flow_diag.valid_frame_count++;
+    g_optical_flow_diag.rx_mode_valid_frame_count[mode]++;
+    if (raw_x != 0U || raw_y != 0U)
+        g_optical_flow_diag.rx_mode_raw_nonzero_frame_count[mode]++;
+    if (raw_x != (uint16_t)d->flow_vel_x || raw_y != (uint16_t)d->flow_vel_y)
+        g_optical_flow_diag.raw_decode_mismatch_count++;
+    if (of_diag_seq_seen && d->dev_id == g_optical_flow_diag.last_dev_id &&
+        d->sys_id == g_optical_flow_diag.last_sys_id)
+    {
+        uint8_t delta = (uint8_t)(d->seq - g_optical_flow_diag.last_seq);
+        if (delta != 1U) g_optical_flow_diag.seq_discontinuity_count++;
+        if (delta == 0U) g_optical_flow_diag.duplicate_seq_count++;
+    }
+    of_diag_seq_seen = 1;
+    g_optical_flow_diag.last_seq = d->seq;
+    g_optical_flow_diag.last_dev_id = d->dev_id;
+    g_optical_flow_diag.last_sys_id = d->sys_id;
+    for (i = 0; i < OPTICAL_FLOW_FRAME_SIZE; ++i)
+        g_optical_flow_diag.last_valid_raw[i] = d->raw[i];
+    if (d->flow_vel_x != 0 || d->flow_vel_y != 0)
+    {
+        g_optical_flow_diag.nonzero_frame_count++;
+        g_optical_flow_diag.rx_mode_nonzero_frame_count[mode]++;
+        g_optical_flow_diag.last_nonzero_x = d->flow_vel_x;
+        g_optical_flow_diag.last_nonzero_y = d->flow_vel_y;
+        g_optical_flow_diag.last_nonzero_seq = d->seq;
+        g_optical_flow_diag.last_nonzero_sensor_ms = d->time_ms;
+        g_optical_flow_diag.last_nonzero_rx_tick = d->received_tick;
+        for (i = 0; i < OPTICAL_FLOW_FRAME_SIZE; ++i)
+            g_optical_flow_diag.last_nonzero_raw[i] = d->raw[i];
+    }
+    __DMB();
+    g_optical_flow_diag.frame_capture_seq++;
+}
 
 static uint64_t OF_Now(void)
 {
@@ -49,6 +98,9 @@ void OpticalFlow_Init(HAL_StatusTypeDef status)
 {
     memset((void *)&g_optical_flow_data, 0, sizeof(g_optical_flow_data));
     memset((void *)&g_optical_flow_stats, 0, sizeof(g_optical_flow_stats));
+    memset((void *)&g_optical_flow_diag, 0, sizeof(g_optical_flow_diag));
+    g_optical_flow_diag.version = 0x00010002U;
+    of_diag_rx_seen = of_diag_task_seen = of_diag_seq_seen = 0;
     of_head = of_tail = of_dma_pos = of_parse_size = 0;
     of_restart = of_retry_wait = 0;
     of_task = NULL;
@@ -64,6 +116,10 @@ void OpticalFlow_SetTaskHandle(TaskHandle_t handle) { of_task = handle; }
 HAL_StatusTypeDef OpticalFlow_Start(void)
 {
     HAL_StatusTypeDef status;
+    uint32_t mode = g_optical_flow_diag.requested_rx_mode;
+    if (mode > OPTICAL_FLOW_RX_IT)
+        mode = (g_optical_flow_diag.rx_mode == OPTICAL_FLOW_RX_IT) ?
+               OPTICAL_FLOW_RX_IT : OPTICAL_FLOW_RX_DMA;
     if (!g_optical_flow_stats.initialized) return HAL_ERROR;
     /* Called by OpticalFlowTask only. Stop callbacks before resetting the ring.
      * HAL abort is bounded; no peripheral init failure reaches Error_Handler. */
@@ -72,18 +128,27 @@ HAL_StatusTypeDef OpticalFlow_Start(void)
     taskENTER_CRITICAL();
     of_head = of_tail = of_dma_pos = of_parse_size = 0;
     of_restart = 0;
+    /* Mark discontinuity in diagnostic history, without clearing evidence. */
+    g_optical_flow_diag.restart_trace_count = g_optical_flow_diag.dma_trace_count;
+    of_diag_seq_seen = 0;
+    if (mode != g_optical_flow_diag.rx_mode)
+        g_optical_flow_diag.rx_mode_switch_count++;
+    g_optical_flow_diag.rx_mode = mode;
     taskEXIT_CRITICAL();
     if (status == HAL_OK)
     {
         __HAL_UART_CLEAR_FLAG(&huart10, UART_CLEAR_PEF | UART_CLEAR_FEF |
                              UART_CLEAR_NEF | UART_CLEAR_OREF | UART_CLEAR_IDLEF);
         __HAL_UART_SEND_REQ(&huart10, UART_RXDATA_FLUSH_REQUEST);
-        if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+        if (mode == OPTICAL_FLOW_RX_DMA && (SCB->CCR & SCB_CCR_DC_Msk) != 0U)
             SCB_CleanInvalidateDCache_by_Addr((uint32_t *)of_dma, sizeof(of_dma));
         __DSB();
         /* Set before HAL enables DMA interrupts; an immediate error must persist. */
         g_optical_flow_stats.receiving = 1;
-        status = HAL_UARTEx_ReceiveToIdle_DMA(&huart10, of_dma, sizeof(of_dma));
+        if (mode == OPTICAL_FLOW_RX_DMA)
+            status = HAL_UARTEx_ReceiveToIdle_DMA(&huart10, of_dma, sizeof(of_dma));
+        else
+            status = HAL_UART_Receive_IT(&huart10, &of_it_byte, 1U);
     }
     g_optical_flow_stats.last_status = status;
     g_optical_flow_stats.restart_count++;
@@ -99,31 +164,116 @@ HAL_StatusTypeDef OpticalFlow_Start(void)
 }
 void OpticalFlow_OnRxEvent(UART_HandleTypeDef *uart)
 {
-    uint32_t pos, tick;
-    if (uart != &huart10 || !g_optical_flow_stats.receiving || of_restart) return;
-    pos = (OF_DMA_SIZE - __HAL_DMA_GET_COUNTER(uart->hdmarx)) % OF_DMA_SIZE;
+    uint32_t pos, tick, remaining, gap;
+    if (uart != &huart10) return;
     tick = HAL_GetTick();
-    if (pos == of_dma_pos) return;
+    g_optical_flow_diag.rx_event_count++;
+    if (of_diag_rx_seen)
+    {
+        gap = (uint32_t)(tick - g_optical_flow_diag.rx_last_tick);
+        if (gap > g_optical_flow_diag.rx_max_interval_ms)
+            g_optical_flow_diag.rx_max_interval_ms = gap;
+    }
+    of_diag_rx_seen = 1;
+    g_optical_flow_diag.rx_last_tick = tick;
+    if (!g_optical_flow_stats.receiving || of_restart ||
+        g_optical_flow_diag.rx_mode != OPTICAL_FLOW_RX_DMA)
+    {
+        g_optical_flow_diag.rx_ignored_count++;
+        return;
+    }
+    remaining = __HAL_DMA_GET_COUNTER(uart->hdmarx);
+    pos = (OF_DMA_SIZE - remaining) % OF_DMA_SIZE;
+    g_optical_flow_diag.dma_last_remaining = remaining;
+    g_optical_flow_diag.dma_last_pos = pos;
+    if (pos == of_dma_pos)
+    {
+        g_optical_flow_diag.rx_empty_count++;
+        return;
+    }
     /* RX buffer is read-only for CPU. Invalidate whole owned cache lines, never
      * clean live RX data back over DMA writes. HT interrupts remain enabled. */
     if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
         SCB_InvalidateDCache_by_Addr((uint32_t *)of_dma, sizeof(of_dma));
     __DSB();
+    g_optical_flow_diag.dma_capture_seq++;
+    __DMB();
+    g_optical_flow_diag.dma_last_chunk_begin = g_optical_flow_diag.dma_trace_count;
     while (of_dma_pos != pos)
     {
         uint32_t head = of_head;
+        uint32_t trace_count, queued;
+        uint8_t byte;
         if ((uint32_t)(head - of_tail) >= OF_QUEUE_SIZE)
         {
             g_optical_flow_stats.queue_overflows++;
             of_restart = 1;
             break;
         }
-        of_queue[head % OF_QUEUE_SIZE] = of_dma[of_dma_pos];
+        /* One read supplies both the real queue and diagnostic history. This
+         * is a CPU view of DMA memory, NOT an independent capture of UART RDR. */
+        byte = of_dma[of_dma_pos];
+        trace_count = g_optical_flow_diag.dma_trace_count;
+        g_optical_flow_diag.dma_trace[trace_count % OPTICAL_FLOW_DIAG_TRACE_SIZE] = byte;
+        g_optical_flow_diag.dma_trace_count = trace_count + 1U;
+        of_queue[head % OF_QUEUE_SIZE] = byte;
         of_ticks[head % OF_QUEUE_SIZE] = tick;
         __DMB();
         of_head = head + 1U;
+        queued = (uint32_t)(of_head - of_tail);
+        if (queued > g_optical_flow_diag.queue_high_water_bytes)
+            g_optical_flow_diag.queue_high_water_bytes = queued;
         of_dma_pos = (of_dma_pos + 1U) % OF_DMA_SIZE;
         g_optical_flow_stats.byte_count++;
+    }
+    g_optical_flow_diag.dma_last_chunk_size =
+        (uint32_t)(g_optical_flow_diag.dma_trace_count - g_optical_flow_diag.dma_last_chunk_begin);
+    __DMB();
+    g_optical_flow_diag.dma_capture_seq++;
+    OF_Notify();
+}
+/* Diagnostic alternate transport. HAL reads RDR once into of_it_byte; no DMA
+ * or D-Cache maintenance is involved. Parsing stays in OpticalFlowTask. */
+void OpticalFlow_OnRxByte(UART_HandleTypeDef *uart)
+{
+    uint32_t tick, head, trace_count, queued;
+    HAL_StatusTypeDef status;
+    if (uart != &huart10 || !g_optical_flow_stats.receiving || of_restart ||
+        g_optical_flow_diag.rx_mode != OPTICAL_FLOW_RX_IT) return;
+    tick = HAL_GetTick();
+    g_optical_flow_diag.it_rx_byte_count++;
+    head = of_head;
+    if ((uint32_t)(head - of_tail) >= OF_QUEUE_SIZE)
+    {
+        g_optical_flow_stats.queue_overflows++;
+        of_restart = 1;
+        OF_Notify();
+        return;
+    }
+    g_optical_flow_diag.dma_capture_seq++;
+    __DMB();
+    trace_count = g_optical_flow_diag.dma_trace_count;
+    g_optical_flow_diag.dma_last_chunk_begin = trace_count;
+    g_optical_flow_diag.dma_trace[trace_count % OPTICAL_FLOW_DIAG_TRACE_SIZE] = of_it_byte;
+    g_optical_flow_diag.dma_trace_count = trace_count + 1U;
+    g_optical_flow_diag.dma_last_chunk_size = 1U;
+    of_queue[head % OF_QUEUE_SIZE] = of_it_byte;
+    of_ticks[head % OF_QUEUE_SIZE] = tick;
+    __DMB();
+    of_head = head + 1U;
+    queued = (uint32_t)(of_head - of_tail);
+    if (queued > g_optical_flow_diag.queue_high_water_bytes)
+        g_optical_flow_diag.queue_high_water_bytes = queued;
+    g_optical_flow_stats.byte_count++;
+    __DMB();
+    g_optical_flow_diag.dma_capture_seq++;
+    /* Rearm before waking the task. Failure uses the existing task recovery. */
+    status = HAL_UART_Receive_IT(&huart10, &of_it_byte, 1U);
+    if (status != HAL_OK)
+    {
+        g_optical_flow_diag.it_rearm_failures++;
+        g_optical_flow_stats.last_status = status;
+        of_restart = 1;
     }
     OF_Notify();
 }
@@ -149,6 +299,7 @@ static void OF_Publish(uint32_t tick)
     d.checksum = of_parse[26]; d.has_sample = 1;
     d.received_tick = tick;
     memcpy(d.raw, of_parse, sizeof(d.raw));
+    OF_DiagFrame(&d);
     taskENTER_CRITICAL();
     /* Never publish queued bytes across a discontinuity signalled by an ISR. */
     if (!of_restart)
@@ -160,7 +311,12 @@ static void OF_Publish(uint32_t tick)
         d.rx_count = g_optical_flow_data.rx_count + 1U;
         g_optical_flow_data = d;
         g_optical_flow_stats.frame_count++;
+        if (d.flow_vel_x != 0 || d.flow_vel_y != 0)
+            g_optical_flow_diag.published_nonzero_count++;
+        if (age > g_optical_flow_diag.max_publish_age_ms)
+            g_optical_flow_diag.max_publish_age_ms = age;
     }
+    else g_optical_flow_diag.publish_discard_count++;
     taskEXIT_CRITICAL();
 }
 static void OF_Byte(uint8_t byte, uint32_t tick)
@@ -210,9 +366,27 @@ void OpticalFlow_GetData(OpticalFlowData_t *data)
 }
 void OpticalFlow_ProcessPending(void)
 {
+    uint32_t now = HAL_GetTick();
+    uint32_t frames_before = g_optical_flow_stats.frame_count;
+    if (of_diag_task_seen)
+    {
+        uint32_t gap = (uint32_t)(now - g_optical_flow_diag.task_last_tick);
+        if (gap > g_optical_flow_diag.task_max_interval_ms)
+            g_optical_flow_diag.task_max_interval_ms = gap;
+    }
+    of_diag_task_seen = 1;
+    g_optical_flow_diag.task_last_tick = now;
     g_optical_flow_stats.task_count++;
     OpticalFlow_GetData(NULL);
     if (!g_optical_flow_stats.initialized) return;
+    if (g_optical_flow_diag.requested_rx_mode <= OPTICAL_FLOW_RX_IT &&
+        g_optical_flow_diag.requested_rx_mode != g_optical_flow_diag.rx_mode)
+    {
+        /* Watch changes are applied only in this task. Partial old bytes are
+         * discarded by Start, exactly as in ordinary reception recovery. */
+        of_retry_wait = 0;
+        of_restart = 1;
+    }
     if (of_restart || !g_optical_flow_stats.receiving)
     {
         if (!of_retry_wait || (uint32_t)(HAL_GetTick() - of_retry_tick) >= 100U)
@@ -231,5 +405,10 @@ void OpticalFlow_ProcessPending(void)
             of_tail = tail + 1U;
             OF_Byte(byte, tick);
         }
+    }
+    {
+        uint32_t frames = (uint32_t)(g_optical_flow_stats.frame_count - frames_before);
+        if (frames > g_optical_flow_diag.task_max_batch_frames)
+            g_optical_flow_diag.task_max_batch_frames = frames;
     }
 }

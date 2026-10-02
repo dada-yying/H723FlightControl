@@ -348,6 +348,11 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
     (void)RcSbus_ArmUart5Reception();
 }
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == &huart10) OpticalFlow_OnRxByte(huart);
+}
+
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart == &huart10) { OpticalFlow_OnError(huart); return; }
