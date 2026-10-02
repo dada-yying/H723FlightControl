@@ -13,12 +13,28 @@
 #define FLIGHT_RATE_INTEGRAL_LIMIT 0.30f
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
-/* Nominal covariances: steady K matches the former 50 Hz LPF at 1 kHz.
- * These are response-matching defaults, not measured IMU noise statistics. */
+/* Preserve the production Kalman baseline used by both flight-log analyses. */
 #define FLIGHT_FILTER_DEFAULT_Q 0.015f //Ô­Îª 0.07510204f
 #define FLIGHT_FILTER_DEFAULT_R 1.0f
 #define FLIGHT_FILTER_MIN_NOISE 0.000001f
 #define FLIGHT_FILTER_MAX_NOISE 1000.0f
+/* flight-log-2 recommendation: exact -3 dB bandwidth, not RBJ alpha/Q. */
+#define FLIGHT_NOTCH_CENTER_HZ 100.0f
+#define FLIGHT_NOTCH_BANDWIDTH_HZ 60.0f
+#define FLIGHT_NOTCH_RATE_WINDOW 128U
+#define FLIGHT_NOTCH_PI 3.14159265358979323846f
+
+typedef struct
+{
+    float x1, x2, y1, y2;
+} FlightNotchHistory_t;
+
+static FlightNotchHistory_t s_notch_history[2];
+static float s_notch_b0, s_notch_b1, s_notch_a2;
+static float s_notch_elapsed_s, s_notch_window_s, s_notch_design_hz;
+static uint32_t s_notch_intervals;
+static uint8_t s_notch_active;
+volatile FlightControlNotchState_t g_flight_control_notch;
 
 volatile FlightControlPidConfig_t g_flight_control_pid;
 volatile FlightControlState_t g_flight_control_state;
@@ -90,6 +106,77 @@ static void FlightControl_ResetController(void)
     s_output_saturated = 0U;
 }
 
+static void FlightControl_NotchCoefficients(float sample_hz)
+{
+    /* Keep the complete rejection band comfortably below Nyquist. If the
+     * sustained update rate is too low, use Kalman alone until it recovers. */
+    s_notch_active = (sample_hz > 2.0f * (FLIGHT_NOTCH_CENTER_HZ +
+                       FLIGHT_NOTCH_BANDWIDTH_HZ)) ? 1U : 0U;
+    s_notch_design_hz = sample_hz;
+    if (s_notch_active != 0U)
+    {
+        float beta = tanf(FLIGHT_NOTCH_PI * FLIGHT_NOTCH_BANDWIDTH_HZ / sample_hz);
+        s_notch_b0 = 1.0f / (1.0f + beta);
+        s_notch_b1 = -2.0f * s_notch_b0 *
+            cosf(2.0f * FLIGHT_NOTCH_PI * FLIGHT_NOTCH_CENTER_HZ / sample_hz);
+        s_notch_a2 = 2.0f * s_notch_b0 - 1.0f;
+    }
+    g_flight_control_notch.applied_sample_hz = sample_hz;
+    g_flight_control_notch.active = s_notch_active;
+    g_flight_control_notch.coefficient_update_count++;
+}
+
+static void FlightControl_NotchReset(void)
+{
+    s_notch_elapsed_s = 0.0f;
+    s_notch_window_s = 0.0f;
+    s_notch_intervals = 0U;
+    g_flight_control_notch.sample_hz = 1.0f / FLIGHT_DEFAULT_DT_S;
+    FlightControl_NotchCoefficients(1.0f / FLIGHT_DEFAULT_DT_S);
+}
+
+static void FlightControl_NotchMeasurePeriod(void)
+{
+    s_notch_window_s += s_notch_elapsed_s;
+    s_notch_intervals++;
+    if (s_notch_intervals >= FLIGHT_NOTCH_RATE_WINDOW)
+    {
+        float hz = (float)s_notch_intervals / s_notch_window_s;
+        uint8_t active = (hz > 2.0f * (FLIGHT_NOTCH_CENTER_HZ +
+                            FLIGHT_NOTCH_BANDWIDTH_HZ)) ? 1U : 0U;
+        g_flight_control_notch.sample_hz = hz;
+        /* Average fresh-sample intervals, not logger throughput. A 1% deadband
+         * avoids coefficient modulation by ordinary task scheduling jitter. */
+        if ((fabsf(hz - s_notch_design_hz) > 0.01f * s_notch_design_hz) ||
+            (active != s_notch_active))
+        {
+            if ((active == 0U) && (s_notch_active != 0U))
+                g_flight_control_notch.rate_fault_count++;
+            FlightControl_NotchCoefficients(hz);
+        }
+        s_notch_window_s = 0.0f;
+        s_notch_intervals = 0U;
+    }
+}
+
+static float FlightControl_NotchApply(uint32_t axis, float input, uint8_t seed)
+{
+    FlightNotchHistory_t *h = &s_notch_history[axis];
+    float output;
+    if ((seed != 0U) || (s_notch_active == 0U))
+    {
+        h->x1 = h->x2 = h->y1 = h->y2 = input;
+        return input;
+    }
+    output = s_notch_b0 * input + s_notch_b1 * h->x1 + s_notch_b0 * h->x2
+             - s_notch_b1 * h->y1 - s_notch_a2 * h->y2;
+    h->x2 = h->x1;
+    h->x1 = input;
+    h->y2 = h->y1;
+    h->y1 = output;
+    return output;
+}
+
 /* Task-only scalar random-walk Kalman filters, rad/s. No attitude/bias fusion.
  * Each axis owns x/P; Q/R are shared. Independent of PID resets. */
 /* ¿¨¶ûÂüÂË²¨ */
@@ -107,8 +194,16 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
         s_filter_initialized = 0U;
         return;
     }
+    /* Include duplicate-call intervals in the next fresh-sample period, but
+     * never iterate the notch or its period estimator on a cached sample. */
+    s_notch_elapsed_s += dt;
     if ((s_filter_seen_sample != 0U) && (imu->gyro_rx_count == s_filter_rx_count))
         return;
+    if (s_filter_initialized == 0U)
+        FlightControl_NotchReset();
+    else
+        FlightControl_NotchMeasurePeriod();
+    s_notch_elapsed_s = 0.0f;
     /* Read once per fresh sample. Reject the whole pair if either is invalid.
      * Ordered bounds also reject NaN and either infinity. */
     requested_q = g_flight_control_filter.q;
@@ -133,6 +228,9 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     g_flight_control_state.roll_rate_raw_rad_s = raw[0];
     g_flight_control_state.pitch_rate_raw_rad_s = raw[1];
     g_flight_control_state.yaw_rate_raw_rad_s = raw[2];
+    raw[0] = FlightControl_NotchApply(0U, raw[0], (uint8_t)(s_filter_initialized == 0U));
+    raw[1] = FlightControl_NotchApply(1U, raw[1], (uint8_t)(s_filter_initialized == 0U));
+    g_flight_control_notch.sample_count++;
     q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
     if (s_filter_initialized == 0U)
     {
@@ -169,6 +267,11 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
 
 void FlightControl_Init(void)
 {
+    (void)memset((void *)&g_flight_control_notch, 0, sizeof(g_flight_control_notch));
+    (void)memset(s_notch_history, 0, sizeof(s_notch_history));
+    g_flight_control_notch.center_hz = FLIGHT_NOTCH_CENTER_HZ;
+    g_flight_control_notch.bandwidth_hz = FLIGHT_NOTCH_BANDWIDTH_HZ;
+    FlightControl_NotchReset();
     s_filter_q = FLIGHT_FILTER_DEFAULT_Q;
     s_filter_r = FLIGHT_FILTER_DEFAULT_R;
     (void)memset((void *)&g_flight_control_filter, 0, sizeof(g_flight_control_filter));

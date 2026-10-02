@@ -20,6 +20,8 @@ void EscPwm_SetMixedNormalized(const float p[4]) { memcpy(test_motors,p,sizeof(t
 static void test_flight_init(void)
 {
     FlightControl_Init();
+    /* Test gains are explicit; production gains are user tuning values. */
+    memset((void *)&g_flight_control_pid,0,sizeof(g_flight_control_pid));
     g_flight_control_filter.q=0.07510204f;
     g_flight_control_filter.r=1.0f;
 }
@@ -48,6 +50,16 @@ static double reference_kalman(double *x, double *p, double z, double q, double 
     *p=r*predicted/(predicted+r);
     return gain;
 }
+/* Next notch output using double coefficients and the previous sample state.
+ * Full independent state/response tests are in test_notch.c. */
+static float reference_next_notch(unsigned axis, float input)
+{
+    const FlightNotchHistory_t *h=&s_notch_history[axis];
+    double fs=g_flight_control_notch.applied_sample_hz;
+    double b0=1/(1+tan(3.14159265358979323846*60/fs));
+    double b1=-2*b0*cos(2*3.14159265358979323846*100/fs);
+    return (float)(b0*input+b1*h->x1+b0*h->x2-b1*h->y1-(2*b0-1)*h->y2);
+}
 static void test_filter(void)
 {
     unsigned i;
@@ -71,8 +83,8 @@ static void test_filter(void)
     test_imu.gyro_x=0; test_imu.gyro_y=-2;
     run(); /* RC invalid/locked must not prevent filtering. */
     near_value(g_flight_control_filter.gain[0],alpha);
-    near_value(g_flight_control_state.roll_rate_rad_s,1+alpha);
-    near_value(g_flight_control_state.pitch_rate_rad_s,-2+2*alpha);
+    near_value(g_flight_control_state.roll_rate_rad_s,1+alpha*0.839799649f);
+    near_value(g_flight_control_state.pitch_rate_rad_s,-2+2*alpha*0.839799649f);
     near_value(g_flight_control_state.yaw_rate_rad_s,-3);
     held=g_flight_control_state.roll_rate_rad_s;
     covariance=s_filter_covariance[0]; gain=g_flight_control_filter.gain[0];
@@ -85,7 +97,7 @@ static void test_filter(void)
     near_value(g_flight_control_filter.applied_r,1);
     g_flight_control_filter.q=0.07510204f; g_flight_control_filter.r=1;
     ref_x=held; ref_p=covariance;
-    ref_gain=reference_kalman(&ref_x,&ref_p,2,0.07510204,1,0.002);
+    ref_gain=reference_kalman(&ref_x,&ref_p,reference_next_notch(0,2),0.07510204,1,0.002);
     test_imu.gyro_rx_count++; test_dwt.CYCCNT+=960000;
     FlightControl_Run();
     near_value(g_flight_control_state.roll_rate_rad_s,(float)ref_x);
@@ -95,7 +107,7 @@ static void test_filter(void)
     near_value(g_flight_control_state.roll_rate_rad_s,2);
     near_value(g_flight_control_state.pitch_rate_rad_s,0);
     test_imu.gyro_y=2; run();
-    near_value(g_flight_control_state.roll_rate_rad_s,2-4*alpha);
+    near_value(g_flight_control_state.roll_rate_rad_s,2-4*alpha*0.839799649f);
     held=g_flight_control_state.roll_rate_rad_s;
     /* Active control must use the same filtered feedback exported to VOFA. */
     frame(1696,1024,0); test_armed=1;
@@ -104,7 +116,7 @@ static void test_filter(void)
     g_flight_control_filter.q=0.3f; g_flight_control_filter.r=0.5f;
     s_roll_integral=0.12f; s_last_roll_error=0.456f; s_have_error=1;
     ref_x=held; ref_p=s_filter_covariance[0];
-    ref_gain=reference_kalman(&ref_x,&ref_p,-2,0.3,0.5,0.001);
+    ref_gain=reference_kalman(&ref_x,&ref_p,reference_next_notch(0,-2),0.3,0.5,0.001);
     run();
     expected=(float)ref_x;
     near_value(g_flight_control_state.roll_rate_rad_s,expected);
@@ -178,7 +190,8 @@ static void test_kalman_extremes(void)
                 assert(isfinite(s_filtered_rate[axis]));
                 assert(g_flight_control_filter.gain[axis]>=0 && g_flight_control_filter.gain[axis]<=1);
             }
-            assert(fabsf(s_filtered_rate[0])<=10.0001f);
+            /* A notch step can overshoot the input range, unlike Kalman alone. */
+            assert(fabsf(s_filtered_rate[0])<20.0f);
             near_value(s_filtered_rate[1],0); near_value(s_filtered_rate[2],0);
         }
     }
@@ -271,7 +284,7 @@ static void test_pitch_rate_damping(void)
         expected=sign*0.3f;
         for(step=0;step<2;step++) {
             test_imu.gyro_x=sign*((step==0) ? 0.3f : 0.6f);
-            if(step!=0) expected+=alpha*(test_imu.gyro_x-expected);
+            if(step!=0) expected+=alpha*(reference_next_notch(1,test_imu.gyro_x)-expected);
             run(); FlightControl_GetState(&state);
             near_value(state.pitch_rad,0.12f);
             near_value(state.pitch_rate_rad_s,expected);
@@ -431,11 +444,12 @@ static void test_raw_roll_telemetry(void)
     near_value(g_flight_control_state.roll_rate_rad_s,1);
 
     test_imu.gyro_y=-3; run();
-    expected=1+2*alpha;
+    expected=1+2*alpha*0.839799649f;
     near_value(g_flight_control_state.roll_rate_raw_rad_s,3);
     near_value(g_flight_control_state.roll_rate_rad_s,expected);
-    test_imu.gyro_y=2; run();
-    expected+=alpha*(-2-expected);
+    test_imu.gyro_y=2;
+    expected+=alpha*(reference_next_notch(0,-2)-expected);
+    run();
     FlightControl_GetState(&state);
     near_value(state.roll_rate_raw_rad_s,-2);
     near_value(state.roll_rate_rad_s,expected);

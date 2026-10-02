@@ -74,6 +74,21 @@ typedef struct
 } FlightControlFilter_t;
 extern volatile FlightControlFilter_t g_flight_control_filter;
 
+/* Read-only Watch diagnostics. Roll/Pitch fixed notch precedes Kalman;
+ * Yaw uses Kalman alone. Coefficients follow the averaged fresh-sample rate. */
+typedef struct
+{
+    float center_hz;
+    float bandwidth_hz; /* Exact -3 dB bandwidth. */
+    float sample_hz;
+    float applied_sample_hz;
+    uint32_t sample_count;
+    uint32_t coefficient_update_count;
+    uint32_t rate_fault_count;
+    uint8_t active; /* 0 only if sustained sample rate cannot support notch. */
+} FlightControlNotchState_t;
+extern volatile FlightControlNotchState_t g_flight_control_notch;
+
 void FlightControl_Init(void);
 void FlightControl_SetTaskHandle(TaskHandle_t task_handle);
 void FlightControl_NotifyFromISR(void);

@@ -38,7 +38,8 @@ CH7~CH13 的顺序和含义不变，串口发送超时仍为 10 ms；CH7/CH9 随
 姿态与角速度均使用控制器机体轴向，不再混用原始姿态坐标与控制坐标。
 角速度映射为 Roll = -gyro_y、Pitch = +gyro_x、Yaw = -gyro_z，先映射再滤波。
 Pitch 角速度按最新台架反馈修正为 +gyro_x，机头下俯转动为正；Pitch 姿态角仍为 +imu.roll，不改变。
-卡尔曼滤波及内环算法不变；PID 与 CH8/10/12 共用这些滤波反馈，CH10 同步体现修正后的 Pitch 角速度。
+Roll/Pitch 在卡尔曼前增加 100 Hz / BW 60 Hz 陷波，Yaw 仅经过卡尔曼；详见 ../../GYRO_NOTCH.md。
+PID 与 CH8/10/12 共用最终滤波反馈，CH10 同步体现修正后的 Pitch 角速度。
 `g_flight_control_state.roll_rate_raw_rad_s` 保存参与本次滤波的原始 Roll 输入，内部单位 rad/s。
 仅在新有效 GYRO 样本时更新，上电为零；无新样本或 IMU 无效/超时时保持上次值，恢复后随新样本更新。
 CH8 与 CH13 从同一次飞控快照取值。CH13 仅供观察，不替代 PID 反馈。
@@ -74,6 +75,7 @@ CubeMX 再生成后需复核自定义 UART7 非致命错误返回、黑匣子调
 ## 角速度一维卡尔曼滤波参数
 
 三轴反馈各自维护角速度估计 x 和协方差 P，使用随机游走模型，共用 Q/R 参数。
+Roll/Pitch 的 measurement 为前置陷波的输出，Yaw 的 measurement 为机体系原始角速度。
 滤波常开，PID 和 VOFA CH8/10/12 使用同一滤波结果，不融合姿态角、不估计零偏。
 `g_atom_imu_data.gyro_x/y/z` 仍保留原始 rad/s 数据。
 
@@ -105,6 +107,8 @@ Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没�
 在线改参会改变闭环响应，先拆桨验证；曲线更平滑不代表闭环或飞行稳定性通过。
 
 ## 验证
+
+陷波专项参数、更新率校正、Watch 和测试说明见 ../../GYRO_NOTCH.md。
 
 运行 `tests/pid_tuning/run.ps1`：用 MSVC 编译实际 rc_sbus、flight_control、vofa 源码，
 替代 HAL/RTOS/电调接口来检查映射、有效帧确认、回中门控、单轴 Mixer、保护和串口字节布局。
