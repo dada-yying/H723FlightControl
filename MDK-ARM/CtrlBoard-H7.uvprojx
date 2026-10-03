@@ -575,6 +575,16 @@
           <GroupName>App</GroupName>
           <Files>
             <File>
+              <FileName>bmi088_heater.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/bmi088_heater.c</FilePath>
+            </File>
+            <File>
+              <FileName>bmi088.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/bmi088.c</FilePath>
+            </File>
+            <File>
               <FileName>app_main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/app_main.c</FilePath>

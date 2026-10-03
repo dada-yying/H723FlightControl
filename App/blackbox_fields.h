@@ -2,6 +2,7 @@
 #define BLACKBOX_FIELDS_H
 #include "../../references/blackbox_protocol/sbb3.h"
 #include "vofa.h"
+#include "bmi088.h"
 /* Add fields here and populate their bytes in Blackbox_Sample below.
  * Offsets may overlap for decoded views of an existing raw byte region.
  * Payload size and schema ID are derived, never hard-coded by the receiver. */
@@ -24,8 +25,24 @@ static const BlackboxField s_fields[] = {
     BF("of_flow_quality","",102,1,SBB_U8), BF("of_flow_status","",103,1,SBB_U8), BF("of_reserved2","",104,1,SBB_U16),
     BF("of_checksum","",106,1,SBB_U8), BF("of_age_ms","ms",107,1,SBB_U32), BF("of_has_sample","",111,1,SBB_U8),
     BF("fc_timestamp_us","us",112,1,SBB_U64),
+    BF("bmi088_gyro_rad_s","rad/s",120,3,SBB_F32),
+    BF("bmi088_accel_m_s2","m/s^2",132,3,SBB_F32),
+    BF("bmi088_temperature_c","degC",144,1,SBB_F32),
+    /* "Raw" BMI088 motion is now calibrated/unfiltered. No pre-calibration
+     * registers/physical arrays or duplicate calibrated arrays are logged. */
+    BF("bmi088_temperature_raw","LSB",148,1,SBB_I16),
+    BF("bmi088_sample_count","",150,1,SBB_U32),
+    BF("bmi088_sample_time_ms","ms",154,1,SBB_U32),
+    BF("bmi088_age_ms","ms",158,1,SBB_U32),
+    BF("bmi088_has_sample","",162,1,SBB_U8),
+    BF("bmi088_valid","",163,1,SBB_U8),
+    BF("bmi088_initialized","",164,1,SBB_U8),
+    BF("bmi088_error","",165,1,SBB_U8),
+    BF("bmi088_calibration_version","",166,1,SBB_U32),
+    BF("bmi088_compensation_temperature_c","degC",170,1,SBB_F32),
+    BF("bmi088_compensation_in_range","",174,1,SBB_U8),
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    BF("new_float","test",120,1,SBB_F32), BF("new_uint32","test",124,1,SBB_U32), BF("new_array","test",128,3,SBB_I16),
+    BF("new_float","test",175,1,SBB_F32), BF("new_uint32","test",179,1,SBB_U32), BF("new_array","test",183,3,SBB_I16),
 #endif
 };
 #undef BF
@@ -57,16 +74,27 @@ static void Blackbox_Sample(uint8_t *payload, uint64_t timestamp_us)
 {
     /* Static snapshots: sole caller is FlightControlTask; keep its stack small. */
     static FlightControlState_t flight;static RcSbusData_t rc;static EscPwmState_t esc;static OpticalFlowData_t optical;
+    static Bmi088Data_t bmi;
     FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);OpticalFlow_GetData(&optical);
+    Bmi088_GetData(&bmi);
     memset(payload,0,s_payload_size);
     /* Existing builder supplies the unchanged base and exact optical bytes.
      * Its legacy tail is outside the baseline payload and overwritten below/CRC. */
     VOFA_BuildBlackboxFrame(payload,&flight,&rc,&esc,&optical);
     /* Same capture instant and clock as the SBB3 packet header. */
     sbb_p64(payload+112,timestamp_us);
+    memcpy(payload+120,bmi.gyro_rad_s,12);memcpy(payload+132,bmi.accel_m_s2,12);
+    memcpy(payload+144,&bmi.temperature_c,4);
+    sbb_p16(payload+148,(uint16_t)bmi.temperature_raw);
+    sbb_p32(payload+150,bmi.sample_count);sbb_p32(payload+154,bmi.sample_tick_ms);
+    sbb_p32(payload+158,bmi.age_ms);
+    payload[162]=bmi.has_sample;payload[163]=bmi.valid;
+    payload[164]=bmi.initialized;payload[165]=bmi.error;
+    sbb_p32(payload+166,bmi.calibration_version);
+    memcpy(payload+170,&bmi.compensation_temperature_c,4);payload[174]=bmi.compensation_in_range;
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    { const float v=1.25f;memcpy(payload+120,&v,4);sbb_p32(payload+124,0xfffffffeU);
-      sbb_p16(payload+128,(uint16_t)-32768);sbb_p16(payload+130,0);sbb_p16(payload+132,32767); }
+    { const float v=1.25f;memcpy(payload+175,&v,4);sbb_p32(payload+179,0xfffffffeU);
+      sbb_p16(payload+183,(uint16_t)-32768);sbb_p16(payload+185,0);sbb_p16(payload+187,32767); }
 #endif
 }
 #endif

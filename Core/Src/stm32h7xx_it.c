@@ -26,6 +26,7 @@
 /* USER CODE BEGIN Includes */
 #include "fdcan.h"
 #include "usart.h"
+#include "tim.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -76,6 +77,7 @@ static void Fault_SaveSnapshot(void)
 {
   /* Fault context must not call FreeRTOS, SPI/UART, or HAL timeout loops. */
   __disable_irq();
+  TIM3_HeaterEmergencyOff();
   if (g_fault_snapshot.exception_number == 0U)
   {
     g_fault_snapshot.cfsr = SCB->CFSR;
@@ -107,6 +109,7 @@ static void Fault_SaveSnapshot(void)
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
+  TIM3_HeaterEmergencyOff();
 
   /* USER CODE END NonMaskableInt_IRQn 0 */
   /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
@@ -138,6 +141,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+  TIM3_HeaterEmergencyOff();
 
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
@@ -168,6 +172,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
+  TIM3_HeaterEmergencyOff();
 
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)

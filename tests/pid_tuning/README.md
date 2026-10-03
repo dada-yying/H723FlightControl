@@ -143,3 +143,35 @@ test_vofa_esc.c 编译真实 esc_pwm 和 vofa，检查四路限幅、PWM 映射�
 ## 光流扩展回归
 
 见 ../../OPTICAL_FLOW.md。test_optical_flow.c 检查任意分片、粘包、噪声、错误帧、未知消息、整数边界、缓存/DMA 回绕、重复事件、队列溢出、UART 恢复/重试、tick 回绕及年龄饱和。运行 run.ps1 会输出 H723 真实组帧文件到 F407 tests/build/h723_wire.bin；随后运行 F407 tests/run.cmd 或直接 tests/run_cross.ps1，验证真实接收代码和 FatFs 写出的多分段文件，再由 Python 逐字段恢复。该测试不代替实机 DMA/缓存时序和 SD 卡可靠性验证。
+## BMI088 logging tests
+
+`test_bmi088.c` exercises the production acquisition module with a register/SPI
+model, including the accel dummy byte, coherent sample publication, signed
+raw/physical values, temperature, delayed config verification, failures/retries
+and tick wrap. `test_blackbox.c` checks the added schema/payload and unchanged
+VOFA. The optional task and sensor have no flight-control consumer.
+After the F407 storage tests, run `python -B tests/verify_bmi088_blackbox.py`
+from the H723 directory to check every restored BMI088 field.
+
+`test_bmi088_heater.c` uses the real sensor model to verify fixed 40 C thermal
+PI, saturation/anti-windup, independent stale-sample shutdown, manual/latched
+stops, failures, tick wrap, and ESC isolation. The thermal plant model is not
+a real-board temperature guarantee.
+
+BMI088 raw now means calibrated/unfiltered physical values in the canonical
+gyro_rad_s/accel_m_s2 arrays. Register/nominal motion values and duplicate
+calibrated arrays are no longer published/logged. Acquisition tests check the
+compiled static/temperature coefficients, cold/intermediate/hot cases, model
+bounds/invalid temperatures, signed gyro correction, six +/-XYZ gravity vectors,
+no reapplication on reads, coherent fault/timeout hold and recovery. Blackbox
+tests check the revised schema/version and absence of pre-calibration motion;
+the unchanged F407/converter cross-check compares exact float32 results.
+`tests/test_bmi088_calibration_analysis.py` separately checks tilted-face fits,
+invalid orientation coverage, temperature warm-up and collision guards using
+the bundled Python numpy/pandas runtime. No tests imply a real-board calibration
+or flight accuracy guarantee.
+
+`tests/test_bmi088_temperature_analysis.py` checks anchored gyro bias regression,
+gravity-norm thermal fitting and equal recording weights. The real-log analysis
+uses leave-one-recording-out validation and rejects poorly repeatable accel
+thermal models; colder incomplete coverage is reported, not silently validated.

@@ -2,9 +2,10 @@
 #include "stm32h7xx_hal.h"
 #include "FreeRTOS.h"
 typedef struct { uint32_t compare[4]; } TIM_HandleTypeDef;
-static TIM_HandleTypeDef htim1, htim2;
+static TIM_HandleTypeDef htim1, htim2, htim3;
 #define TIM_CHANNEL_1 0U
 #define TIM_CHANNEL_3 2U
+#define TIM_CHANNEL_4 3U
 static HAL_StatusTypeDef test_pwm_start_status = HAL_OK;
 static unsigned test_check_pwm_critical;
 static void test_set_compare(TIM_HandleTypeDef *timer, unsigned channel, uint32_t pulse)

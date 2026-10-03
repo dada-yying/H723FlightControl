@@ -26,6 +26,10 @@
 #include "fdcan.h"
 #include "rc_sbus.h"
 #include "ws2812_ctrl.h"
+#include "bmi088.h"
+#include "bmi088_heater.h"
+#include "tim.h"
+#include "spi.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,6 +61,11 @@ const osThreadAttr_t defaultTask_attributes = {
 
 osThreadId_t rcTaskHandle;
 osThreadId_t opticalFlowTaskHandle;
+osThreadId_t bmi088TaskHandle;
+const osThreadAttr_t bmi088Task_attributes = {
+  .name = "Bmi088Task", .stack_size = 1024,
+  .priority = (osPriority_t) osPriorityNormal1,
+};
 const osThreadAttr_t opticalFlowTask_attributes = {
   .name = "OpticalFlowTask", .stack_size = 1024,
   .priority = (osPriority_t) osPriorityNormal,
@@ -91,6 +100,7 @@ void StartDefaultTask(void *argument);
 void StartOpticalFlowTask(void *argument);
 void StartRcTask(void *argument);
 void StartFlightControlTask(void *argument);
+void StartBmi088Task(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -102,6 +112,8 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 void MX_FREERTOS_Init(void) {
   /* Optional sensor: failure does not prevent flight tasks from starting. */
   OpticalFlow_Init(MX_USART10_Init());
+  Bmi088_Init(MX_SPI2_Init());
+  Bmi088Heater_Init(MX_TIM3_Init());
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
@@ -131,6 +143,8 @@ void MX_FREERTOS_Init(void) {
   opticalFlowTaskHandle = osThreadNew(StartOpticalFlowTask, NULL, &opticalFlowTask_attributes);
   OpticalFlow_SetTaskHandle((TaskHandle_t)opticalFlowTaskHandle);
   if (opticalFlowTaskHandle == NULL) OpticalFlow_Init(HAL_ERROR);
+  bmi088TaskHandle = osThreadNew(StartBmi088Task, NULL, &bmi088Task_attributes);
+  if (bmi088TaskHandle == NULL) Bmi088_OnTaskCreationFailure();
 
   /* USER CODE BEGIN RTOS_THREADS */
   if (defaultTaskHandle == NULL)
@@ -181,6 +195,7 @@ void StartDefaultTask(void *argument)
   (void)argument;
   for (;;)
   {
+    Bmi088Heater_CheckTimeout();
     FDCAN3_UpdateDiagnostics();
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
@@ -265,5 +280,21 @@ void StartOpticalFlowTask(void *argument)
   }
 }
 /* USER CODE BEGIN Application */
+void StartBmi088Task(void *argument)
+{
+  TickType_t last_wake_time = xTaskGetTickCount();
+  const TickType_t period = pdMS_TO_TICKS(1U);
+  (void)argument;
+  for (;;)
+  {
+    Bmi088_Process();
+    Bmi088Heater_Process();
+    g_bmi088_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
+    /* Skip missed slots; never run a catch-up burst of stale sensor reads. */
+    if ((TickType_t)(xTaskGetTickCount() - last_wake_time) >= period)
+      last_wake_time = xTaskGetTickCount();
+    vTaskDelayUntil(&last_wake_time, period);
+  }
+}
 
 /* USER CODE END Application */

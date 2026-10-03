@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file    tim.c
-  * @brief   TIM1/TIM2 configuration for four 400 Hz ESC PWM outputs.
+  * @brief   TIM1/TIM2 ESC PWM and TIM3 board BMI088 heater PWM.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -10,6 +10,46 @@
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+
+HAL_StatusTypeDef MX_TIM3_Init(void)
+{
+  TIM_MasterConfigTypeDef master = {0};
+  TIM_OC_InitTypeDef channel = {0};
+  HAL_StatusTypeDef status;
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 23U;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 9999U;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  status = HAL_TIM_PWM_Init(&htim3);
+  if (status != HAL_OK) return status;
+  master.MasterOutputTrigger = TIM_TRGO_RESET;
+  master.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  status = HAL_TIMEx_MasterConfigSynchronization(&htim3, &master);
+  if (status != HAL_OK) return status;
+  channel.OCMode = TIM_OCMODE_PWM1;
+  channel.Pulse = 0;
+  channel.OCPolarity = TIM_OCPOLARITY_HIGH;
+  channel.OCFastMode = TIM_OCFAST_DISABLE;
+  status = HAL_TIM_PWM_ConfigChannel(&htim3, &channel, TIM_CHANNEL_4);
+  if (status != HAL_OK) return status;
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0U);
+  HAL_TIM_MspPostInit(&htim3);
+  return HAL_OK;
+}
+
+void TIM3_HeaterEmergencyOff(void)
+{
+  /* No HAL/RTOS, floating point, or wait in fault context. Only this heater. */
+  if (__HAL_RCC_TIM3_IS_CLK_ENABLED())
+  {
+    TIM3->CCER &= ~TIM_CCER_CC4E;
+    TIM3->CCR4 = 0U;
+    TIM3->EGR = TIM_EGR_UG;
+  }
+}
 
 void MX_TIM1_Init(void)
 {
@@ -121,6 +161,10 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *tim_pwmHandle)
   {
     __HAL_RCC_TIM2_CLK_ENABLE();
   }
+  else if (tim_pwmHandle->Instance == TIM3)
+  {
+    __HAL_RCC_TIM3_CLK_ENABLE();
+  }
 }
 
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *timHandle)
@@ -149,6 +193,16 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef *timHandle)
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM2;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   }
+  else if (timHandle->Instance == TIM3)
+  {
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    GPIO_InitStruct.Pin = GPIO_PIN_1;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF2_TIM3;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  }
 }
 
 void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *tim_pwmHandle)
@@ -160,5 +214,10 @@ void HAL_TIM_PWM_MspDeInit(TIM_HandleTypeDef *tim_pwmHandle)
   else if (tim_pwmHandle->Instance == TIM2)
   {
     __HAL_RCC_TIM2_CLK_DISABLE();
+  }
+  else if (tim_pwmHandle->Instance == TIM3)
+  {
+    TIM3_HeaterEmergencyOff();
+    __HAL_RCC_TIM3_CLK_DISABLE();
   }
 }

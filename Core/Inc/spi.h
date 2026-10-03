@@ -33,6 +33,7 @@ extern "C" {
 /* USER CODE END Includes */
 
 extern SPI_HandleTypeDef hspi6;
+extern SPI_HandleTypeDef hspi2;
 
 /* USER CODE BEGIN Private defines */
 
@@ -41,6 +42,7 @@ extern SPI_HandleTypeDef hspi6;
 void MX_SPI6_Init(void);
 
 /* USER CODE BEGIN Prototypes */
+HAL_StatusTypeDef MX_SPI2_Init(void); /* Optional logging sensor. */
 
 /* USER CODE END Prototypes */
 

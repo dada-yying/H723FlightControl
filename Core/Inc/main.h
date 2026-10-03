@@ -61,6 +61,8 @@ void Error_Handler(void);
 /* USER CODE BEGIN Private defines */
 #define POWER_5V_EN_Pin GPIO_PIN_15
 #define POWER_5V_EN_GPIO_Port GPIOC
+#define BMI088_ACC_CS_Pin GPIO_PIN_0
+#define BMI088_GYRO_CS_Pin GPIO_PIN_3
  
 /* USER CODE END Private defines */
 

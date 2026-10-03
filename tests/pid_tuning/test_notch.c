@@ -21,6 +21,10 @@ static double ref_notch(RefNotch *s,double x,double fs,int seed)
 static void init_notch_test(void)
 {
     RcSbus_Init(); FlightControl_Init(); test_armed=0;
+    /* The double reference below uses explicit test parameters. Production
+     * Q/R are user tuning values and may legitimately differ from .015/1. */
+    g_flight_control_filter.q=.015f; g_flight_control_filter.r=1;
+    g_flight_control_filter.yaw_q=.015f; g_flight_control_filter.yaw_r=1;
     memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
 }
 
