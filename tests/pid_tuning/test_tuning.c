@@ -24,6 +24,8 @@ static void test_flight_init(void)
     memset((void *)&g_flight_control_pid,0,sizeof(g_flight_control_pid));
     g_flight_control_filter.q=0.07510204f;
     g_flight_control_filter.r=1.0f;
+    g_flight_control_filter.yaw_q=0.07510204f;
+    g_flight_control_filter.yaw_r=1.0f;
 }
 static void near_value(float actual, float expected) { assert(fabsf(actual-expected)<0.0001f); }
 static void frame(uint16_t axis, uint16_t slider, uint8_t flags)
@@ -177,6 +179,8 @@ static void test_kalman_extremes(void)
         memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
         g_flight_control_filter.q=params[q_index];
         g_flight_control_filter.r=params[r_index];
+        g_flight_control_filter.yaw_q=params[q_index];
+        g_flight_control_filter.yaw_r=params[r_index];
         for(step=0;step<100;step++) {
             float dt=(step%2==0) ? 0.0002f : 0.005f;
             test_imu.gyro_y=(step%2==0) ? 10.0f : -10.0f;

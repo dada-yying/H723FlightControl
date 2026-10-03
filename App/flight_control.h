@@ -66,11 +66,15 @@ extern volatile FlightControlTuning_t g_flight_control_tuning;
 
 typedef struct
 {
-    float q;         /* Watch: process covariance per 1 ms, 1e-6..1e3. */
-    float r;         /* Watch: measurement covariance, 1e-6..1e3. */
+    float q;         /* Roll/Pitch Watch: process covariance per 1 ms, 1e-6..1e3. */
+    float r;         /* Roll/Pitch Watch: measurement covariance, 1e-6..1e3. */
     float applied_q; /* Observation only; invalid pairs retain previous values. */
     float applied_r;
     float gain[3];   /* Observation: last update K, Roll/Pitch/Yaw; seed uses 1. */
+    float yaw_q;     /* Yaw Watch: process covariance per 1 ms, 1e-6..1e3. */
+    float yaw_r;     /* Yaw Watch: measurement covariance, 1e-6..1e3. */
+    float applied_yaw_q; /* Independent valid-pair acceptance; observation only. */
+    float applied_yaw_r;
 } FlightControlFilter_t;
 extern volatile FlightControlFilter_t g_flight_control_filter;
 

@@ -7,6 +7,9 @@ Q = 100/60。此前 `../飞行日志/flight2分析/flight2分析结论.md` 的 1
 
 输入链：机体系映射 → 保存原始角速度 → Roll/Pitch 陷波 → 原标量卡尔曼 → PID/遥测。
 映射保留 Roll=-gyro_y、Pitch=+gyro_x、Yaw=-gyro_z；卡尔曼默认 q=0.015、r=1。
+从 2026-10-03 起，`g_flight_control_filter.q/r` 只配置 Roll/Pitch；Yaw 使用独立的
+`yaw_q/yaw_r`，默认也为 0.015/1。两组分别校验、分别计算 Q_step 及初始化协方差；
+`applied_yaw_q/applied_yaw_r` 显示 Yaw 生效值。提高 Roll/Pitch 的 q 不会改变 Yaw 响应。
 VOFA CH8/10 与黑匣子 Roll/Pitch 实际角速度自动使用完整滤波结果；CH13/14/15
 及黑匣子的三个 raw 字段仍是陷波与卡尔曼之前的原始值。协议、通道和 PID 参数未修改。
 

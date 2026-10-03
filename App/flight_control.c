@@ -14,8 +14,10 @@
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
 /* Preserve the production Kalman baseline used by both flight-log analyses. */
-#define FLIGHT_FILTER_DEFAULT_Q 0.015f //原为 0.07510204f
+#define FLIGHT_FILTER_DEFAULT_Q 0.02f //原为 0.07510204f
 #define FLIGHT_FILTER_DEFAULT_R 1.0f
+#define FLIGHT_FILTER_YAW_DEFAULT_Q 0.015f
+#define FLIGHT_FILTER_YAW_DEFAULT_R 1.0f
 #define FLIGHT_FILTER_MIN_NOISE 0.000001f
 #define FLIGHT_FILTER_MAX_NOISE 1000.0f
 /* flight-log-2 recommendation: exact -3 dB bandwidth, not RBJ alpha/Q. */
@@ -42,6 +44,8 @@ volatile FlightControlTuning_t g_flight_control_tuning;
 volatile FlightControlFilter_t g_flight_control_filter;
 static float s_filter_q;
 static float s_filter_r;
+static float s_filter_yaw_q;
+static float s_filter_yaw_r;
 static float s_filtered_rate[3];
 static float s_filter_covariance[3];
 static uint32_t s_filter_rx_count;
@@ -178,15 +182,14 @@ static float FlightControl_NotchApply(uint32_t axis, float input, uint8_t seed)
 }
 
 /* Task-only scalar random-walk Kalman filters, rad/s. No attitude/bias fusion.
- * Each axis owns x/P; Q/R are shared. Independent of PID resets. */
+ * Each axis owns x/P; Roll/Pitch share Q/R, Yaw has its own pair.
+ * Independent of PID resets. */
 /* 卡尔曼滤波 */
 static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
 {
     float requested_q;
     float requested_r;
     float raw[3];
-    float q_step;
-    float initial_covariance = 0.0f;
     uint32_t axis;
 
     if (imu->gyro_valid == 0U)
@@ -218,6 +221,19 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     }
     g_flight_control_filter.applied_q = s_filter_q;
     g_flight_control_filter.applied_r = s_filter_r;
+    /* Validate Yaw independently: a rejected pair cannot block the other group. */
+    requested_q = g_flight_control_filter.yaw_q;
+    requested_r = g_flight_control_filter.yaw_r;
+    if ((requested_q >= FLIGHT_FILTER_MIN_NOISE) &&
+        (requested_q <= FLIGHT_FILTER_MAX_NOISE) &&
+        (requested_r >= FLIGHT_FILTER_MIN_NOISE) &&
+        (requested_r <= FLIGHT_FILTER_MAX_NOISE))
+    {
+        s_filter_yaw_q = requested_q;
+        s_filter_yaw_r = requested_r;
+    }
+    g_flight_control_filter.applied_yaw_q = s_filter_yaw_q;
+    g_flight_control_filter.applied_yaw_r = s_filter_yaw_r;
     s_filter_seen_sample = 1U;
     s_filter_rx_count = imu->gyro_rx_count;
     /* Preserve the confirmed PID/telemetry signs and axis mapping.
@@ -231,31 +247,29 @@ static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
     raw[0] = FlightControl_NotchApply(0U, raw[0], (uint8_t)(s_filter_initialized == 0U));
     raw[1] = FlightControl_NotchApply(1U, raw[1], (uint8_t)(s_filter_initialized == 0U));
     g_flight_control_notch.sample_count++;
-    q_step = s_filter_q * (dt / FLIGHT_DEFAULT_DT_S);
-    if (s_filter_initialized == 0U)
-    {
-        /* Positive solution of P^2 + Q*P - Q*R = 0, rationalized to
-         * avoid cancellation when Q is much larger than R. */
-        initial_covariance = (2.0f * q_step * s_filter_r) /
-            (sqrtf(q_step * q_step + 4.0f * q_step * s_filter_r) + q_step);
-    }
     for (axis = 0U; axis < 3U; axis++)
     {
+        const float q = (axis == 2U) ? s_filter_yaw_q : s_filter_q;
+        const float r = (axis == 2U) ? s_filter_yaw_r : s_filter_r;
+        const float q_step = q * (dt / FLIGHT_DEFAULT_DT_S);
         if (s_filter_initialized == 0U)
         {
             s_filtered_rate[axis] = raw[axis];
-            s_filter_covariance[axis] = initial_covariance;
+            /* Stable positive solution of P^2 + Q*P - Q*R = 0,
+             * seeded from this axis group's parameters. */
+            s_filter_covariance[axis] = (2.0f * q_step * r) /
+                (sqrtf(q_step * q_step + 4.0f * q_step * r) + q_step);
             g_flight_control_filter.gain[axis] = 1.0f;
         }
         else
         {
             const float predicted = s_filter_covariance[axis] + q_step;
-            const float gain = predicted / (predicted + s_filter_r);
+            const float gain = predicted / (predicted + r);
             const float remaining = 1.0f - gain;
             s_filtered_rate[axis] += gain * (raw[axis] - s_filtered_rate[axis]);
             /* Joseph form preserves nonnegative covariance at extreme Q/R. */
             s_filter_covariance[axis] = remaining * remaining * predicted +
-                                       gain * gain * s_filter_r;
+                                       gain * gain * r;
             g_flight_control_filter.gain[axis] = gain;
         }
     }
@@ -274,11 +288,17 @@ void FlightControl_Init(void)
     FlightControl_NotchReset();
     s_filter_q = FLIGHT_FILTER_DEFAULT_Q;
     s_filter_r = FLIGHT_FILTER_DEFAULT_R;
+    s_filter_yaw_q = FLIGHT_FILTER_YAW_DEFAULT_Q;
+    s_filter_yaw_r = FLIGHT_FILTER_YAW_DEFAULT_R;
     (void)memset((void *)&g_flight_control_filter, 0, sizeof(g_flight_control_filter));
     g_flight_control_filter.q = s_filter_q;
     g_flight_control_filter.r = s_filter_r;
     g_flight_control_filter.applied_q = s_filter_q;
     g_flight_control_filter.applied_r = s_filter_r;
+    g_flight_control_filter.yaw_q = s_filter_yaw_q;
+    g_flight_control_filter.yaw_r = s_filter_yaw_r;
+    g_flight_control_filter.applied_yaw_q = s_filter_yaw_q;
+    g_flight_control_filter.applied_yaw_r = s_filter_yaw_r;
     s_filter_initialized = 0U;
     s_filter_seen_sample = 0U;
     s_filter_rx_count = 0U;

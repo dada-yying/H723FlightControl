@@ -74,7 +74,8 @@ CubeMX 再生成后需复核自定义 UART7 非致命错误返回、黑匣子调
 
 ## 角速度一维卡尔曼滤波参数
 
-三轴反馈各自维护角速度估计 x 和协方差 P，使用随机游走模型，共用 Q/R 参数。
+三轴反馈各自维护角速度估计 x 和协方差 P，使用随机游走模型。
+Roll/Pitch 共用 q/r，Yaw 独立使用 yaw_q/yaw_r，各自按 dt 计算 Q_step。
 Roll/Pitch 的 measurement 为前置陷波的输出，Yaw 的 measurement 为机体系原始角速度。
 滤波常开，PID 和 VOFA CH8/10/12 使用同一滤波结果，不融合姿态角、不估计零偏。
 `g_atom_imu_data.gyro_x/y/z` 仍保留原始 rad/s 数据。
@@ -83,10 +84,14 @@ Keil Watch 接口（旧 cutoff_hz / applied_cutoff_hz 已移除）：
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
-| `g_flight_control_filter.q` | 0.015 | 每 1 ms 的过程噪声协方差参数 |
-| `g_flight_control_filter.r` | 1.0 | 测量噪声协方差参数 |
-| `g_flight_control_filter.applied_q` | 0.015 | 实际生效 q，只读观察 |
-| `g_flight_control_filter.applied_r` | 1.0 | 实际生效 r，只读观察 |
+| `g_flight_control_filter.q` | 0.015 | Roll/Pitch 每 1 ms 的过程噪声协方差参数 |
+| `g_flight_control_filter.r` | 1.0 | Roll/Pitch 测量噪声协方差参数 |
+| `g_flight_control_filter.applied_q` | 0.015 | Roll/Pitch 实际生效 q，只读观察 |
+| `g_flight_control_filter.applied_r` | 1.0 | Roll/Pitch 实际生效 r，只读观察 |
+| `g_flight_control_filter.yaw_q` | 0.015 | Yaw 每 1 ms 的过程噪声协方差参数 |
+| `g_flight_control_filter.yaw_r` | 1.0 | Yaw 测量噪声协方差参数 |
+| `g_flight_control_filter.applied_yaw_q` | 0.015 | Yaw 实际生效 q，只读观察 |
+| `g_flight_control_filter.applied_yaw_r` | 1.0 | Yaw 实际生效 r，只读观察 |
 | `g_flight_control_filter.gain[0..2]` | 初始化前 0 | 最近更新增益，Roll/Pitch/Yaw；首样本直接采纳时为 1 |
 
 q/r 的名义协方差单位均为 (rad/s)^2；q 在每次更新按 dt/0.001 缩放。
@@ -94,7 +99,7 @@ q/r 的名义协方差单位均为 (rad/s)^2；q 在每次更新按 dt/0.001 缩
 主机参考响应测试显式设 q=0.07510204、r=1，在 1 kHz 下稳态 K 约 0.239057，接近原 50 Hz 一阶低通系数；不修改生产默认值。
 固定采样周期、固定 Q/R 时，稳态响应仍相当于固定增益的一阶平滑。
 
-q、r 均只接受 1e-6～1e3 的有限值；任一非法则整组拒绝，继续使用上一组有效值。
+两组 q、r 均只接受 1e-6～1e3 的有限值；一组内任一非法则该组拒绝，继续使用该组上一有效值，另一组独立生效。
 解锁期间也允许修改，下一次新 GYRO 样本更新生效，不重置 x/P 或 PID 历史。
 Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没有额外的提交开关。
 增大 q/r 比值会更快跟随、减弱平滑；减小则增强平滑、增加延迟。
