@@ -5,7 +5,7 @@
 
 #define BMI088_HEATER_TARGET_C 40.0f
 #define BMI088_HEATER_OVERTEMP_C 45.0f
-#define BMI088_HEATER_MAX_CCR 500U /* ARR=9999, maximum duty 5%, as board example. */
+#define BMI088_HEATER_MAX_CCR 1500U /* ARR=9999, maximum duty 5%, as board example. */
 
 typedef enum {
     BMI088_HEATER_OK = 0,

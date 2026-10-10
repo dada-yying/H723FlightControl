@@ -580,6 +580,16 @@
               <FilePath>../App/bmi088_heater.c</FilePath>
             </File>
             <File>
+              <FileName>bmi088_attitude.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../App/bmi088_attitude.c</FilePath>
+            </File>
+            <File>
+              <FileName>FusionAhrs.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../ThirdParty/Fusion/FusionAhrs.c</FilePath>
+            </File>
+            <File>
               <FileName>bmi088.c</FileName>
               <FileType>1</FileType>
               <FilePath>../App/bmi088.c</FilePath>

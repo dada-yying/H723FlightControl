@@ -3,6 +3,7 @@
 #include "../../references/blackbox_protocol/sbb3.h"
 #include "vofa.h"
 #include "bmi088.h"
+#include "bmi088_attitude.h"
 /* Add fields here and populate their bytes in Blackbox_Sample below.
  * Offsets may overlap for decoded views of an existing raw byte region.
  * Payload size and schema ID are derived, never hard-coded by the receiver. */
@@ -24,25 +25,32 @@ static const BlackboxField s_fields[] = {
     BF("of_flow_x","cm/s@1m",98,1,SBB_I16), BF("of_flow_y","cm/s@1m",100,1,SBB_I16),
     BF("of_flow_quality","",102,1,SBB_U8), BF("of_flow_status","",103,1,SBB_U8), BF("of_reserved2","",104,1,SBB_U16),
     BF("of_checksum","",106,1,SBB_U8), BF("of_age_ms","ms",107,1,SBB_U32), BF("of_has_sample","",111,1,SBB_U8),
-    BF("fc_timestamp_us","us",112,1,SBB_U64),
-    BF("bmi088_gyro_rad_s","rad/s",120,3,SBB_F32),
-    BF("bmi088_accel_m_s2","m/s^2",132,3,SBB_F32),
-    BF("bmi088_temperature_c","degC",144,1,SBB_F32),
+    /* Flight capture time exists once, in the SBB3 header (sample_time_us). */
+    BF("bmi088_gyro_deg_s","deg/s",112,3,SBB_F32),
+    BF("bmi088_accel_m_s2","m/s^2",124,3,SBB_F32),
+    BF("bmi088_temperature_c","degC",136,1,SBB_F32),
     /* "Raw" BMI088 motion is now calibrated/unfiltered. No pre-calibration
      * registers/physical arrays or duplicate calibrated arrays are logged. */
-    BF("bmi088_temperature_raw","LSB",148,1,SBB_I16),
-    BF("bmi088_sample_count","",150,1,SBB_U32),
-    BF("bmi088_sample_time_ms","ms",154,1,SBB_U32),
-    BF("bmi088_age_ms","ms",158,1,SBB_U32),
-    BF("bmi088_has_sample","",162,1,SBB_U8),
-    BF("bmi088_valid","",163,1,SBB_U8),
-    BF("bmi088_initialized","",164,1,SBB_U8),
-    BF("bmi088_error","",165,1,SBB_U8),
-    BF("bmi088_calibration_version","",166,1,SBB_U32),
-    BF("bmi088_compensation_temperature_c","degC",170,1,SBB_F32),
-    BF("bmi088_compensation_in_range","",174,1,SBB_U8),
+    /* Celsius exactly represents the 11-bit temperature counts; no second copy. */
+    BF("bmi088_sample_count","",140,1,SBB_U32),
+    BF("bmi088_sample_time_ms","ms",144,1,SBB_U32),
+    BF("bmi088_age_ms","ms",148,1,SBB_U32),
+    BF("bmi088_has_sample","",152,1,SBB_U8),
+    BF("bmi088_valid","",153,1,SBB_U8),
+    BF("bmi088_initialized","",154,1,SBB_U8),
+    BF("bmi088_error","",155,1,SBB_U8),
+    BF("bmi088_calibration_version","",156,1,SBB_U32),
+    BF("bmi088_compensation_temperature_c","degC",160,1,SBB_F32),
+    BF("bmi088_compensation_in_range","",164,1,SBB_U8),
+    BF("bmi088_roll_deg","deg",165,1,SBB_F32),
+    BF("bmi088_pitch_deg","deg",169,1,SBB_F32),
+    BF("bmi088_yaw_deg","deg",173,1,SBB_F32), /* Relative within attitude epoch. */
+    BF("bmi088_attitude_valid","",177,1,SBB_U8),
+    BF("bmi088_attitude_epoch","",178,1,SBB_U32),
+    BF("bmi088_attitude_accel_used","",182,1,SBB_U8),
+    BF("bmi088_attitude_error","",183,1,SBB_U8),
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    BF("new_float","test",175,1,SBB_F32), BF("new_uint32","test",179,1,SBB_U32), BF("new_array","test",183,3,SBB_I16),
+    BF("new_float","test",184,1,SBB_F32), BF("new_uint32","test",188,1,SBB_U32), BF("new_array","test",192,3,SBB_I16),
 #endif
 };
 #undef BF
@@ -70,31 +78,40 @@ static int Blackbox_CreateSchema(void)
     sbb_p16(s_schema,(uint16_t)count);sbb_p16(s_schema+2,s_payload_size);
     s_schema_size=(uint16_t)pos;s_schema_id=sbb_crc(s_schema,pos);return 1;
 }
-static void Blackbox_Sample(uint8_t *payload, uint64_t timestamp_us)
+static void Blackbox_Sample(uint8_t *payload)
 {
-    /* Static snapshots: sole caller is FlightControlTask; keep its stack small. */
+    /* Static snapshots: sole caller is BlackboxTask; keep its stack small. */
     static FlightControlState_t flight;static RcSbusData_t rc;static EscPwmState_t esc;static OpticalFlowData_t optical;
     static Bmi088Data_t bmi;
+    static Bmi088AttitudeState_t attitude;
     FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);OpticalFlow_GetData(&optical);
-    Bmi088_GetData(&bmi);
+    Bmi088_GetSnapshot(&bmi, &attitude);
     memset(payload,0,s_payload_size);
     /* Existing builder supplies the unchanged base and exact optical bytes.
      * Its legacy tail is outside the baseline payload and overwritten below/CRC. */
     VOFA_BuildBlackboxFrame(payload,&flight,&rc,&esc,&optical);
-    /* Same capture instant and clock as the SBB3 packet header. */
-    sbb_p64(payload+112,timestamp_us);
-    memcpy(payload+120,bmi.gyro_rad_s,12);memcpy(payload+132,bmi.accel_m_s2,12);
-    memcpy(payload+144,&bmi.temperature_c,4);
-    sbb_p16(payload+148,(uint16_t)bmi.temperature_raw);
-    sbb_p32(payload+150,bmi.sample_count);sbb_p32(payload+154,bmi.sample_tick_ms);
-    sbb_p32(payload+158,bmi.age_ms);
-    payload[162]=bmi.has_sample;payload[163]=bmi.valid;
-    payload[164]=bmi.initialized;payload[165]=bmi.error;
-    sbb_p32(payload+166,bmi.calibration_version);
-    memcpy(payload+170,&bmi.compensation_temperature_c,4);payload[174]=bmi.compensation_in_range;
+    /* Legacy builder's JustFloat tail is replaced by the first BMI float. */
+    { unsigned axis;
+      for(axis=0;axis<3;axis++) {
+          const float rate_deg_s=bmi.gyro_rad_s[axis]*57.295779513f;
+          memcpy(payload+112+4*axis,&rate_deg_s,4);
+      } }
+    memcpy(payload+124,bmi.accel_m_s2,12);
+    memcpy(payload+136,&bmi.temperature_c,4);
+    sbb_p32(payload+140,bmi.sample_count);sbb_p32(payload+144,bmi.sample_tick_ms);
+    sbb_p32(payload+148,bmi.age_ms);
+    payload[152]=bmi.has_sample;payload[153]=bmi.valid;
+    payload[154]=bmi.initialized;payload[155]=bmi.error;
+    sbb_p32(payload+156,bmi.calibration_version);
+    memcpy(payload+160,&bmi.compensation_temperature_c,4);payload[164]=bmi.compensation_in_range;
+    { const float roll=attitude.roll_rad*57.295779513f, pitch=attitude.pitch_rad*57.295779513f,
+                  yaw=attitude.yaw_rad*57.295779513f;
+      memcpy(payload+165,&roll,4);memcpy(payload+169,&pitch,4);memcpy(payload+173,&yaw,4); }
+    payload[177]=attitude.valid;sbb_p32(payload+178,attitude.epoch);
+    payload[182]=attitude.accel_used;payload[183]=attitude.error;
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    { const float v=1.25f;memcpy(payload+175,&v,4);sbb_p32(payload+179,0xfffffffeU);
-      sbb_p16(payload+183,(uint16_t)-32768);sbb_p16(payload+185,0);sbb_p16(payload+187,32767); }
+    { const float v=1.25f;memcpy(payload+184,&v,4);sbb_p32(payload+188,0xfffffffeU);
+      sbb_p16(payload+192,(uint16_t)-32768);sbb_p16(payload+194,0);sbb_p16(payload+196,32767); }
 #endif
 }
 #endif

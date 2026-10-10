@@ -48,13 +48,13 @@ CH8 与 CH13 从同一次飞控快照取值。CH13 仅供观察，不替代 PID 
 ## UART7 黑匣子
 
 - PE8 / AF7 / UART7_TX：2000000、8N1、仅发送、无流控、不反相；接黑匣子 RX 并共地，接收端必须兼容 3.3 V UART 电平。
-- USART1 保持 230400 / 100 Hz。两路共享 CH0～CH19 的基础组帧，再分别扩展：USART1 为 96 字节/23 float；UART7 为 116 字节扩展二进制，包含光流原始帧、年龄和 has_sample。详见 ../../OPTICAL_FLOW.md。
-- 每次 FlightControl_Run 返回后采集快照并尝试 DMA 发送，约 1 kHz；不是把 100 Hz 数据重复十次。锁定也记录；IMU 停止触发后不周期发送、不补算或补帧。
-- 黑匣子需支持连续 116 kB/s（约 6.96 MB/min）。8N1 线路占用 58%，一帧约 580 µs；发送完成并不代表接收端已经落盘。
+- USART1 保持 230400 / 100 Hz / 23 float / 96字节；UART7为自描述SBB3、当前载荷184字节/包长212字节，包含BMI和光流。详见 ../../BLACKBOX_V3.md。
+- BlackboxTask由TIM4独立触发，目标700Hz，与FlightControl_Run/ATOM通知脱钩。锁定或IMU断流仍记录最新快照和状态/年龄；不补算或补帧，不伪造新传感器样本。
+- 当前DATA为148.4kB/s，占2Mbps的74.2%，单包约1060µs；字段定义另占带宽和时隙。发送完成不代表已落盘。
 - 使用 DMA1_Stream1 / UART7_TX，IRQ 优先级 6；保留 UART5 的 Stream0。仅 UART TC 完成回调释放在途缓冲，忙时丢本次帧、不覆盖、不排队。
-- 128 字节缓冲独占四个缓存行，32 字节对齐，`.blackbox_dma` 显式放入 AXI SRAM；仅发前 116 字节，D-Cache 开启时清理完整 128 字节。不能搬入 DTCM。
-- 发送忙超过 5 ms 或 UART7 错误，在飞控任务中非阻塞中止；同步/异步中止完成后恢复。中止再超过 5 ms 或返回失败则本次上电禁用记录。没有 IMU 通知时，每 5 ms 的任务超时分支继续维护发送状态。
-- 初始化失败只禁用黑匣子；运行错误不重置飞控、不修改 PID/滤波/电机安全规则。无确认、无重传；日志无序号，不能仅靠文件恢复准确丢帧时刻。
+- 512字节缓冲独占16个缓存行，32字节对齐，`.blackbox_dma`显式放入AXI SRAM；按实际包长发送，开启D-Cache时清理完整512字节。不能搬入DTCM。
+- 发送忙超过5ms或UART7错误，在黑匣子任务中非阻塞中止；中止再超过5ms或返回失败则本次上电禁用记录。10ms通知超时唤醒只维护定义/恢复，不产生DATA。
+- UART/任务/TIM4初始化失败只禁用黑匣子，不修改PID/滤波/电机安全规则。无确认、无重传；SBB3保留发送序号和采集时间。
 
 Watch：`g_blackbox_tx_stats.initialized/busy/disabled/state`，
 `submitted_count/completed_count/busy_drop_count/error_count/timeout_count/abort_count`，
@@ -64,9 +64,11 @@ Watch：`g_blackbox_tx_stats.initialized/busy/disabled/state`，
 主机测试 `test_blackbox.c` 编译真实组帧、黑匣子、RC、飞控和电调源码，模拟 DMA 启动/中止与 UART 完成/错误回调：
 核对两路相同输入的基础 20 通道及各自扩展帧、旧接口兼容、锁定归零、缓冲区持有、cache 调用、忙丢帧、5 ms 边界、同步/异步中止、tick 回绕及 UART5 回调分流。
 HAL 外设行为、链接地址和真实时序不由这些桩测试证明。ARMCC 构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory optical-flow-verified`。
-本次构建通过 55 个源文件；链接结果黑匣子缓冲为 0x24000000 / 128 字节，满足 AXI SRAM 及 32 字节对齐。
-静态最大调用栈：FlightControlTask 408 字节、默认任务 504 字节，均配置 1024 字节；不含完整运行时上下文/所有间接调用影响，仍需实机高水位检查。
+独立700Hz构建通过59个源文件，黑匣子缓冲0x24000000/512字节，满足AXI SRAM及32字节对齐。
+静态栈：BlackboxTask 204/1024、FlightControlTask 364/1024、默认任务504/1024；七个应用任务分配7440/15360堆字节。仍需实机高水位检查。
 CubeMX 再生成后需复核自定义 UART7 非致命错误返回、黑匣子调用点和 scatter 段，不能只保留自动生成初始化。
+
+`test_blackbox_schedule.c`覆盖100秒无漂移的1428/1429µs节拍、ISR不组帧、通知合并/不补发、在途缓存不覆盖、锁定/断流持续记录、最大包限频、定义周期恢复及任务/定时器本地失败。
 
 实机拆桨验收至少 60 秒：USART1 仍约 100 Hz；UART7 提交/完成帧数接近实际飞控更新数，忙丢帧、错误与超时计数不增长，飞控频率保持正常。
 检查线缆帧可按 116 字节解析、F407 V2 日志可用新版工具恢复、数据单位及四路电机顺序正确；检查锁定记录、IMU 停止后不再提交新帧、原电机保护照常生效。
@@ -175,3 +177,19 @@ or flight accuracy guarantee.
 gravity-norm thermal fitting and equal recording weights. The real-log analysis
 uses leave-one-recording-out validation and rejects poorly repeatable accel
 thermal models; colder incomplete coverage is reported, not silently validated.
+
+Blackbox regression now checks a 184-byte payload/212-byte wire DATA packet,
+the added independent BMI attitude/status, capture time only in the header/CSV sample_time_us, and removal
+of the duplicate Celsius-convertible temperature counts. The calibrated BMI
+values/metadata and optical bytes are unchanged. Schema periodic recovery,
+low-rate sensor snapshot repetition, VOFA layout and all safety logic remain.
+
+`test_bmi088_attitude.c` executes the pinned MIT x-io Fusion code, production
+adapter and real SPI publisher. It checks gravity/6-face/non-level/inverted
+alignment; independent positive/negative roll/pitch/yaw; variable measured dt;
+gyro-only prediction, magnitude/angular gating; sample/DWT/tick wrap; coherent
+calibrated raw/attitude pairs; stale/gap/error recovery and relative-Yaw epochs.
+It also rejects non-finite/saturated inputs, zero dt and numerical corruption.
+The 500us timer fixture runs 4000 acquisition events without changing RTOS tick,
+coalesces old triggers and covers timer init/start failures. None proves physical
+2kHz timing, attitude accuracy or flying safety. Check live read_hz/stack headroom.

@@ -21,7 +21,7 @@ static void temperature(float value, unsigned delay)
 {
     test_tick += delay;
     measurement((int)floorf((value - 23.0f) * 8.0f + 0.5f));
-    Bmi088_Process();
+    event_process();
     Bmi088Heater_Process();
     assert(g_bmi088_heater_state.pwm_ccr <= 500);
     assert(htim3.compare[TIM_CHANNEL_4] == g_bmi088_heater_state.pwm_ccr);
@@ -78,7 +78,7 @@ int main(void)
      * uses zero integral. No extra SPI owner is introduced by the guard. */
     heater_reset(100); temperature(30, 1); sample=g_bmi088_data.sample_count;
     fail_call=test_spi_calls+1;fail_status=HAL_TIMEOUT;
-    test_tick++; Bmi088_Process(); Bmi088Heater_Process();
+    test_tick++; event_process(); Bmi088Heater_Process();
     assert(!g_bmi088_heater_state.heating && g_bmi088_data.sample_count == sample);
     assert(g_bmi088_heater_state.stop_reason == BMI088_HEATER_SENSOR_INVALID);
     fail_call=0;test_tick+=1000;ready();temperature(39,1);

@@ -2,8 +2,11 @@
 #define BMI088_H
 
 #include "stm32h7xx_hal.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define BMI088_SAMPLE_TIMEOUT_MS 20U
+#define BMI088_READ_PERIOD_US 500U
 
 typedef enum {
     BMI088_ERROR_NONE = 0,
@@ -12,7 +15,8 @@ typedef enum {
     BMI088_ERROR_GYRO_ID,
     BMI088_ERROR_ACCEL_CONFIG,
     BMI088_ERROR_GYRO_CONFIG,
-    BMI088_ERROR_TASK
+    BMI088_ERROR_TASK,
+    BMI088_ERROR_TIMER
 } Bmi088Error_t;
 
 typedef enum {
@@ -74,15 +78,30 @@ typedef struct {
     uint8_t gyro_chip_id;
     uint8_t last_config_register;
     uint8_t last_config_value;
+    uint32_t timer_irq_count;
+    uint32_t skipped_trigger_count;
+    uint32_t sampling_timeout_count;
+    uint32_t read_hz;
+    uint32_t last_read_interval_us;
+    uint32_t max_read_interval_us;
+    uint32_t max_read_duration_us;
+    HAL_StatusTypeDef last_timer_status;
+    uint32_t timer_error_count;
+    uint8_t timer_running;
 } Bmi088Stats_t;
 
 extern volatile Bmi088Data_t g_bmi088_data;
 extern volatile Bmi088Stats_t g_bmi088_stats;
 extern const Bmi088Calibration_t g_bmi088_calibration;
+struct Bmi088AttitudeState;
 
 void Bmi088_Init(HAL_StatusTypeDef spi_init_status); /* Startup, before tasks. */
-void Bmi088_Process(void); /* Sole SPI2 owner: Bmi088Task, about every 1 ms. */
+HAL_StatusTypeDef Bmi088_StartSampling(TaskHandle_t task); /* Running task only. */
+void Bmi088_NotifyFromISR(void); /* TIM7: notify only, never SPI/math. */
+void Bmi088_OnSamplingTimeout(void); /* No stale-read fallback/catch-up. */
+void Bmi088_Process(void); /* Sole SPI2 owner: notified Bmi088Task, target 2 kHz. */
 void Bmi088_GetData(Bmi088Data_t *data); /* Short, consistent snapshot. */
+void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude);
 void Bmi088_OnTaskCreationFailure(void);
 
 #endif

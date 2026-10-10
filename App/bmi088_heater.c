@@ -6,8 +6,8 @@
 #include <string.h>
 
 #define HEATER_CONTROL_PERIOD_MS 20U
-#define HEATER_KP_CCR_PER_C 100.0f
-#define HEATER_KI_CCR_PER_C_S 50.0f
+#define HEATER_KP_CCR_PER_C 120.0f
+#define HEATER_KI_CCR_PER_C_S 15.0f
 
 volatile Bmi088HeaterState_t g_bmi088_heater_state;
 volatile uint32_t g_bmi088_heater_force_stop;

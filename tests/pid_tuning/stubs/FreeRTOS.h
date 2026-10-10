@@ -8,4 +8,7 @@ static unsigned test_critical_depth;
 #define taskENTER_CRITICAL() ((void)++test_critical_depth)
 #define taskEXIT_CRITICAL() ((void)--test_critical_depth)
 #define portYIELD_FROM_ISR(x) ((void)(x))
-static void vTaskNotifyGiveFromISR(TaskHandle_t t, BaseType_t *w) { (void)t; (void)w; }
+static unsigned test_notify_calls;
+static TaskHandle_t test_notify_task;
+static void vTaskNotifyGiveFromISR(TaskHandle_t t, BaseType_t *w)
+{ test_notify_calls++; test_notify_task=t; (void)w; }

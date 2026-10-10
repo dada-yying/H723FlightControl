@@ -1,11 +1,13 @@
 /* Based on Damiao CtrBoard-H7_IMU BMI088driver/Middleware and the Bosch
  * BMI088 SPI protocol. Acquisition/logging only; no flight-controller input. */
 #include "bmi088.h"
+#include "bmi088_attitude.h"
 #include "bmi088_calibration.h"
 #include "spi.h"
 #include "main.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "tim.h"
 #include <string.h>
 
 #define BMI088_SPI_TIMEOUT_MS 1U
@@ -14,15 +16,15 @@
 #define BMI088_ACCEL_SCALE 0.0008974358974f
 #define BMI088_GYRO_SCALE 0.0010652644360316953f
 
-/* Same ranges/ODR/bandwidth and interrupt registers as the board example:
- * accel +/-3g, 800 Hz; gyro +/-2000 deg/s, 1000 Hz/116 Hz bandwidth.
- * Sensor interrupts are configured, but MCU EXTI/DMA are not used. */
+/* Ranges preserved. Accel highest available ODR = 1600 Hz (normal bandwidth);
+ * gyro ODR = 2000 Hz / 230 Hz bandwidth. MCU reads on TIM7, not sensor DRDY;
+ * accel can repeat in the 2 kHz snapshots, and gyro phase/jitter can skip/repeat. */
 static const uint8_t s_accel_config[][2] = {
-    {0x7D, 0x04}, {0x7C, 0x00}, {0x40, 0xAB},
+    {0x7D, 0x04}, {0x7C, 0x00}, {0x40, 0xAC},
     {0x41, 0x00}, {0x53, 0x08}, {0x58, 0x04}
 };
 static const uint8_t s_gyro_config[][2] = {
-    {0x0F, 0x00}, {0x10, 0x82}, {0x11, 0x00},
+    {0x0F, 0x00}, {0x10, 0x81}, {0x11, 0x00},
     {0x15, 0x80}, {0x16, 0x00}, {0x18, 0x01}
 };
 
@@ -40,6 +42,65 @@ const Bmi088Calibration_t g_bmi088_calibration = {
 };
 static uint32_t s_due_tick, s_last_task_tick;
 static uint8_t s_config_index, s_config_verify, s_task_seen;
+static TaskHandle_t s_sampling_task;
+static uint32_t s_consumed_trigger, s_rate_tick, s_rate_count;
+static uint32_t s_last_read_cycle;
+static uint8_t s_read_cycle_seen;
+
+static void Bmi088_UpdateReadRate(uint32_t now)
+{
+    if ((uint32_t)(now - s_rate_tick) >= 1000U) {
+        g_bmi088_stats.read_hz = (uint32_t)((uint64_t)s_rate_count * 1000U / (uint32_t)(now - s_rate_tick));
+        s_rate_count = 0; s_rate_tick = now;
+    }
+}
+
+HAL_StatusTypeDef Bmi088_StartSampling(TaskHandle_t task)
+{
+    HAL_StatusTypeDef status;
+    /* Called only by StartBmi088Task AFTER the scheduler has started. */
+    if (!task || g_bmi088_stats.stage == BMI088_DISABLED) return HAL_ERROR;
+    s_sampling_task = task;
+    /* DWT is shared with flight/blackbox. Enable it but NEVER reset CYCCNT. */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    status = MX_TIM7_Init();
+    if (status == HAL_OK) {
+        __HAL_TIM_CLEAR_FLAG(&htim7, TIM_FLAG_UPDATE);
+        g_bmi088_stats.timer_running = 1;
+        status = HAL_TIM_Base_Start_IT(&htim7);
+    }
+    g_bmi088_stats.last_timer_status = status;
+    if (status != HAL_OK) {
+        g_bmi088_stats.timer_running = 0;
+        s_sampling_task = NULL;
+        (void)HAL_TIM_Base_Stop_IT(&htim7);
+        g_bmi088_stats.timer_error_count++;
+        g_bmi088_stats.stage = BMI088_DISABLED;
+        g_bmi088_data.valid = g_bmi088_data.initialized = 0;
+        g_bmi088_data.error = BMI088_ERROR_TIMER;
+        Bmi088Attitude_Invalidate();
+    }
+    return status;
+}
+
+void Bmi088_NotifyFromISR(void)
+{
+    BaseType_t wake = pdFALSE;
+    if (g_bmi088_stats.timer_running && s_sampling_task != NULL) {
+        g_bmi088_stats.timer_irq_count++;
+        vTaskNotifyGiveFromISR(s_sampling_task, &wake);
+        portYIELD_FROM_ISR(wake);
+    }
+}
+
+void Bmi088_OnSamplingTimeout(void)
+{
+    g_bmi088_stats.sampling_timeout_count++;
+    Bmi088_GetData(NULL); /* Does not refresh time, perform SPI or fake a sample. */
+    if (!g_bmi088_data.valid) Bmi088Attitude_Invalidate();
+    Bmi088_UpdateReadRate(HAL_GetTick());
+}
 
 static HAL_StatusTypeDef Bmi088_Transfer(uint8_t accel, uint8_t *tx,
                                        uint8_t *rx, uint16_t size)
@@ -89,6 +150,8 @@ static void Bmi088_Fail(Bmi088Error_t error)
     g_bmi088_data.error = (uint8_t)error;
     taskEXIT_CRITICAL();
     g_bmi088_stats.stage = BMI088_RETRY_WAIT;
+    Bmi088Attitude_Invalidate();
+    s_read_cycle_seen = 0;
     s_due_tick = HAL_GetTick() + BMI088_RETRY_MS;
 }
 
@@ -136,6 +199,9 @@ static void Bmi088_Configure(uint8_t accel)
             else {
                 g_bmi088_stats.init_success_count++;
                 g_bmi088_stats.stage = BMI088_RUNNING;
+                /* Initialization events are not backlogged sensor samples. */
+                s_consumed_trigger = g_bmi088_stats.timer_irq_count;
+                s_read_cycle_seen = 0;
                 taskENTER_CRITICAL();
                 g_bmi088_data.initialized = 1;
                 g_bmi088_data.error = BMI088_ERROR_NONE;
@@ -184,6 +250,8 @@ static void Bmi088_ReadSample(void)
     uint8_t accel[6], gyro[8], temp[2], id;
     unsigned axis;
     Bmi088Data_t sample;
+    const Bmi088AttitudeState_t *attitude;
+    uint32_t completion_cycle;
     if (Bmi088_Read(1, 0x00, &id, 1) != HAL_OK) {
         Bmi088_Fail(BMI088_ERROR_SPI); return;
     }
@@ -208,22 +276,29 @@ static void Bmi088_ReadSample(void)
     sample.temperature_c = sample.temperature_raw * 0.125f + 23.0f;
     sample.sample_count = g_bmi088_data.sample_count + 1U;
     sample.sample_tick_ms = HAL_GetTick(); /* Completion time, not sensor time. */
+    completion_cycle = DWT->CYCCNT;
     sample.has_sample = sample.valid = sample.initialized = 1;
     Bmi088_ApplyCalibration(&sample);
+    attitude = Bmi088Attitude_Compute(&sample, completion_cycle);
     taskENTER_CRITICAL();
     g_bmi088_data = sample; /* Publish only after ALL transfers/IDs succeed. */
+    g_bmi088_attitude_state = *attitude; /* Same sample, atomic publication. */
     taskEXIT_CRITICAL();
-    s_due_tick = HAL_GetTick() + 1U;
 }
 
 void Bmi088_Init(HAL_StatusTypeDef spi_init_status)
 {
     memset((void *)&g_bmi088_data, 0, sizeof(g_bmi088_data));
     memset((void *)&g_bmi088_stats, 0, sizeof(g_bmi088_stats));
+    Bmi088Attitude_Init();
     g_bmi088_data.age_ms = UINT32_MAX;
     g_bmi088_stats.last_status = spi_init_status;
     s_config_index = s_config_verify = s_task_seen = 0;
     s_due_tick = HAL_GetTick();
+    s_sampling_task = NULL;
+    s_consumed_trigger = s_rate_count = 0;
+    s_rate_tick = HAL_GetTick();
+    s_read_cycle_seen = 0;
     if (spi_init_status != HAL_OK) {
         g_bmi088_stats.stage = BMI088_DISABLED;
         g_bmi088_stats.init_error_count = 1;
@@ -233,12 +308,21 @@ void Bmi088_Init(HAL_StatusTypeDef spi_init_status)
 
 void Bmi088_OnTaskCreationFailure(void)
 {
+    if (g_bmi088_stats.timer_running) (void)HAL_TIM_Base_Stop_IT(&htim7);
+    g_bmi088_stats.timer_running = 0;
+    s_sampling_task = NULL;
     g_bmi088_stats.stage = BMI088_DISABLED;
     g_bmi088_data.initialized = g_bmi088_data.valid = 0;
     g_bmi088_data.error = BMI088_ERROR_TASK;
+    Bmi088Attitude_Invalidate();
 }
 
 void Bmi088_GetData(Bmi088Data_t *data)
+{
+    Bmi088_GetSnapshot(data, NULL);
+}
+
+void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude)
 {
     uint32_t now;
     taskENTER_CRITICAL();
@@ -248,7 +332,18 @@ void Bmi088_GetData(Bmi088Data_t *data)
         (uint32_t)(now - g_bmi088_data.sample_tick_ms) : UINT32_MAX;
     g_bmi088_data.valid = (uint8_t)(g_bmi088_data.initialized &&
         g_bmi088_data.has_sample && g_bmi088_data.age_ms < BMI088_SAMPLE_TIMEOUT_MS);
+    g_bmi088_attitude_state.age_ms = g_bmi088_attitude_state.epoch ?
+        (uint32_t)(now - g_bmi088_attitude_state.sample_tick_ms) : UINT32_MAX;
+    if (!g_bmi088_data.valid ||
+        g_bmi088_attitude_state.sample_count != g_bmi088_data.sample_count ||
+        g_bmi088_attitude_state.age_ms >= BMI088_SAMPLE_TIMEOUT_MS) {
+        g_bmi088_attitude_state.valid = 0;
+        if (g_bmi088_attitude_state.initialized)
+            g_bmi088_attitude_state.error = g_bmi088_data.initialized ?
+                BMI088_ATTITUDE_TIME_GAP : BMI088_ATTITUDE_SOURCE_INVALID;
+    }
     if (data) *data = g_bmi088_data;
+    if (attitude) *attitude = g_bmi088_attitude_state;
     taskEXIT_CRITICAL();
 }
 
@@ -262,7 +357,11 @@ void Bmi088_Process(void)
     s_last_task_tick = now; s_task_seen = 1;
     g_bmi088_stats.task_count++;
     Bmi088_GetData(NULL);
-    if (g_bmi088_stats.stage == BMI088_DISABLED || (int32_t)(now - s_due_tick) < 0) return;
+    Bmi088_UpdateReadRate(now);
+    /* Startup/retry waits remain in ms. Runtime is driven by timer events, not
+     * the 1 ms HAL tick; two complete reads can legitimately share one tick. */
+    if (g_bmi088_stats.stage == BMI088_DISABLED ||
+        (g_bmi088_stats.stage != BMI088_RUNNING && (int32_t)(now - s_due_tick) < 0)) return;
     switch (g_bmi088_stats.stage) {
     case BMI088_RETRY_WAIT:
         s_config_index = s_config_verify = 0;
@@ -289,7 +388,31 @@ void Bmi088_Process(void)
         if (Bmi088_CheckId(0)) g_bmi088_stats.stage = BMI088_CONFIG_GYRO;
         break;
     case BMI088_CONFIG_GYRO: Bmi088_Configure(0); break;
-    case BMI088_RUNNING: Bmi088_ReadSample(); break;
+    case BMI088_RUNNING:
+    {
+        uint32_t trigger = g_bmi088_stats.timer_irq_count;
+        uint32_t start_cycle, duration, after;
+        if (!g_bmi088_stats.timer_running || trigger == s_consumed_trigger) break;
+        if ((uint32_t)(trigger - s_consumed_trigger) > 1U)
+            g_bmi088_stats.skipped_trigger_count += (uint32_t)(trigger - s_consumed_trigger) - 1U;
+        start_cycle = DWT->CYCCNT;
+        if (s_read_cycle_seen) {
+            const uint32_t interval = (uint32_t)(start_cycle - s_last_read_cycle) / (SystemCoreClock / 1000000U);
+            g_bmi088_stats.last_read_interval_us = interval;
+            if (interval > g_bmi088_stats.max_read_interval_us) g_bmi088_stats.max_read_interval_us = interval;
+        }
+        s_last_read_cycle = start_cycle; s_read_cycle_seen = 1;
+        Bmi088_ReadSample();
+        duration = (uint32_t)(DWT->CYCCNT - start_cycle) / (SystemCoreClock / 1000000U);
+        if (duration > g_bmi088_stats.max_read_duration_us) g_bmi088_stats.max_read_duration_us = duration;
+        if (g_bmi088_stats.stage == BMI088_RUNNING) s_rate_count++;
+        /* Discard/coalesce triggers received before or during this transaction;
+         * never perform a burst of old reads when the task resumes late. */
+        after = g_bmi088_stats.timer_irq_count;
+        g_bmi088_stats.skipped_trigger_count += (uint32_t)(after - trigger);
+        s_consumed_trigger = after;
+        break;
+    }
     default: break;
     }
 }

@@ -62,6 +62,11 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t rcTaskHandle;
 osThreadId_t opticalFlowTaskHandle;
 osThreadId_t bmi088TaskHandle;
+osThreadId_t blackboxTaskHandle;
+const osThreadAttr_t blackboxTask_attributes = {
+  .name = "BlackboxTask", .stack_size = 1024,
+  .priority = (osPriority_t) osPriorityNormal2,
+};
 const osThreadAttr_t bmi088Task_attributes = {
   .name = "Bmi088Task", .stack_size = 1024,
   .priority = (osPriority_t) osPriorityNormal1,
@@ -101,6 +106,7 @@ void StartOpticalFlowTask(void *argument);
 void StartRcTask(void *argument);
 void StartFlightControlTask(void *argument);
 void StartBmi088Task(void *argument);
+void StartBlackboxTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -145,6 +151,8 @@ void MX_FREERTOS_Init(void) {
   if (opticalFlowTaskHandle == NULL) OpticalFlow_Init(HAL_ERROR);
   bmi088TaskHandle = osThreadNew(StartBmi088Task, NULL, &bmi088Task_attributes);
   if (bmi088TaskHandle == NULL) Bmi088_OnTaskCreationFailure();
+  blackboxTaskHandle = osThreadNew(StartBlackboxTask, NULL, &blackboxTask_attributes);
+  if (blackboxTaskHandle == NULL) Blackbox_OnTaskCreationFailure();
 
   /* USER CODE BEGIN RTOS_THREADS */
   if (defaultTaskHandle == NULL)
@@ -251,7 +259,6 @@ void StartFlightControlTask(void *argument)
     if (received == 0U)
     {
       FlightControl_OnTaskTimeout();
-      Blackbox_Service();
       continue;
     }
     pending_gyro_frames += received;
@@ -259,7 +266,6 @@ void StartFlightControlTask(void *argument)
     {
       pending_gyro_frames = 0U;
       FlightControl_Run();
-      Blackbox_SendSnapshot();
     }
   }
 }
@@ -280,20 +286,32 @@ void StartOpticalFlowTask(void *argument)
   }
 }
 /* USER CODE BEGIN Application */
-void StartBmi088Task(void *argument)
+void StartBlackboxTask(void *argument)
 {
-  TickType_t last_wake_time = xTaskGetTickCount();
-  const TickType_t period = pdMS_TO_TICKS(1U);
   (void)argument;
+  (void)Blackbox_StartRecording(xTaskGetCurrentTaskHandle());
   for (;;)
   {
-    Bmi088_Process();
+    /* 700 Hz TIM4 notifications, independent of FlightControl/IMU updates.
+     * Timeout wakes only maintain UART/schema; they never invent DATA slots. */
+    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
+    Blackbox_ProcessPending();
+    g_blackbox_tx_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
+  }
+}
+
+void StartBmi088Task(void *argument)
+{
+  (void)argument;
+  (void)Bmi088_StartSampling(xTaskGetCurrentTaskHandle());
+  for (;;)
+  {
+    /* TIM7 posts 500 us events. Coalesce late events rather than replay reads;
+     * timeout wakes only maintain freshness/heater safety, never fake samples. */
+    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U)) != 0U) Bmi088_Process();
+    else Bmi088_OnSamplingTimeout();
     Bmi088Heater_Process();
     g_bmi088_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
-    /* Skip missed slots; never run a catch-up burst of stale sensor reads. */
-    if ((TickType_t)(xTaskGetTickCount() - last_wake_time) >= period)
-      last_wake_time = xTaskGetTickCount();
-    vTaskDelayUntil(&last_wake_time, period);
   }
 }
 

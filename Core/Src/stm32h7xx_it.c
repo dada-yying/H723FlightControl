@@ -27,6 +27,8 @@
 #include "fdcan.h"
 #include "usart.h"
 #include "tim.h"
+#include "bmi088.h"
+#include "blackbox.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -246,6 +248,15 @@ void UART7_IRQHandler(void)
 
 void DMA1_Stream2_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_usart10_rx); }
 void USART10_IRQHandler(void) { HAL_UART_IRQHandler(&huart10); }
+
+void TIM7_IRQHandler(void) { HAL_TIM_IRQHandler(&htim7); }
+void TIM4_IRQHandler(void) { HAL_TIM_IRQHandler(&htim4); }
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *timer)
+{
+  if (timer->Instance == TIM7) Bmi088_NotifyFromISR();
+  if (timer->Instance == TIM4) Blackbox_NotifyFromISR();
+}
 
 /* USER CODE BEGIN 1 */
 

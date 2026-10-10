@@ -51,17 +51,22 @@ with tempfile.TemporaryDirectory(prefix="bmi088-cross-") as directory:
                         nominal_gyro = f32(gyro * f32(0.0010652644360316953))
                         nominal_accel = f32(accel * f32(0.0008974358974))
                         applied_bias = f32(gyro_bias[axis] + f32(gyro_temperature[axis] * -7.0))
-                        assert float(row[f"bmi088_gyro_rad_s[{axis}]"]) == f32(nominal_gyro - applied_bias)
+                        assert f"bmi088_gyro_rad_s[{axis}]" not in row
+                        assert float(row[f"bmi088_gyro_deg_s[{axis}]"]) == f32(f32(nominal_gyro - applied_bias) * f32(57.295779513))
                         assert float(row[f"bmi088_accel_m_s2[{axis}]"]) == f32(f32(nominal_accel - accel_bias[axis]) * accel_scale[axis])
                     assert row["bmi088_calibration_version"] == "2026100302"
                     assert row["bmi088_compensation_in_range"] == "1" and float(row["bmi088_compensation_temperature_c"]) == 33
                     assert float(row["bmi088_temperature_c"]) == 33
-                    assert int(row["bmi088_temperature_raw"]) == 80
+                    assert "bmi088_temperature_raw" not in row
                     assert int(row["bmi088_sample_count"]) == 4294967294
                     assert int(row["bmi088_age_ms"]) == 0
                     assert all(row["bmi088_" + name] == "1" for name in ("has_sample", "valid", "initialized"))
                     assert row["bmi088_error"] == "0"
-                    assert row["fc_timestamp_us"] == row["sample_time_us"]
+                    assert "fc_timestamp_us" not in row and int(row["sample_time_us"]) > 0
+                    for name, rad in (("roll", 0.25), ("pitch", -0.125), ("yaw", 0.5)):
+                        assert float(row["bmi088_" + name + "_deg"]) == f32(f32(rad) * f32(57.295779513))
+                    assert row["bmi088_attitude_valid"] == "1" and row["bmi088_attitude_epoch"] == "7"
+                    assert row["bmi088_attitude_accel_used"] == "1" and row["bmi088_attitude_error"] == "2"
                     if extra:
                         assert row["new_float"] == "1.25" and row["new_uint32"] == "4294967294"
                         assert [row[f"new_array[{i}]"] for i in range(3)] == ["-32768", "0", "32767"]

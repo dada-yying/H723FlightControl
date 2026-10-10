@@ -2,15 +2,74 @@
 /**
   ******************************************************************************
   * @file    tim.c
-  * @brief   TIM1/TIM2 ESC PWM and TIM3 board BMI088 heater PWM.
+  * @brief   ESC/heater PWM and TIM7 2 kHz BMI088 acquisition trigger.
   ******************************************************************************
   */
 /* USER CODE END Header */
 #include "tim.h"
+#include "bmi088.h"
 
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim4;
+TIM_HandleTypeDef htim7;
+
+HAL_StatusTypeDef MX_TIM4_Init(void)
+{
+  /* APB1 timer = 240 MHz. 1 MHz counter, rational periods set by blackbox. */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 239U;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 1427U;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  return HAL_TIM_Base_Init(&htim4);
+}
+
+HAL_StatusTypeDef MX_TIM7_Init(void)
+{
+  /* APB1 timer clock = 240 MHz, counter = 1 MHz, update every 500 us.
+   * Optional initialization; the BMI task handles any failure locally. */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 239U;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = BMI088_READ_PERIOD_US - 1U;
+  htim7.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  return HAL_TIM_Base_Init(&htim7);
+}
+
+void HAL_TIM_Base_MspInit(TIM_HandleTypeDef *timer)
+{
+  if (timer->Instance == TIM4)
+  {
+    __HAL_RCC_TIM4_CLK_ENABLE();
+    HAL_NVIC_SetPriority(TIM4_IRQn, 6U, 0U);
+    HAL_NVIC_EnableIRQ(TIM4_IRQn);
+  }
+  if (timer->Instance == TIM7)
+  {
+    __HAL_RCC_TIM7_CLK_ENABLE();
+    /* Legal FreeRTOS FromISR priority; start only from the running BMI task. */
+    HAL_NVIC_SetPriority(TIM7_IRQn, 6U, 0U);
+    HAL_NVIC_EnableIRQ(TIM7_IRQn);
+  }
+}
+
+void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef *timer)
+{
+  if (timer->Instance == TIM4)
+  {
+    HAL_NVIC_DisableIRQ(TIM4_IRQn);
+    __HAL_RCC_TIM4_CLK_DISABLE();
+  }
+  if (timer->Instance == TIM7)
+  {
+    HAL_NVIC_DisableIRQ(TIM7_IRQn);
+    __HAL_RCC_TIM7_CLK_DISABLE();
+  }
+}
 
 HAL_StatusTypeDef MX_TIM3_Init(void)
 {

@@ -1,6 +1,8 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include "../../ThirdParty/Fusion/FusionAhrs.c"
+#include "../../App/bmi088_attitude.c"
 #include "../../App/bmi088.c"
 
 static uint8_t registers[2][128], accel_spi_mode;
@@ -9,6 +11,7 @@ static HAL_StatusTypeDef fail_status;
 static int bad_config;
 static uint32_t reset_tick[2], write_tick[2];
 static uint8_t last_written[2];
+static unsigned trigger_during_spi;
 
 /* Emulates both physical SPI protocols with distinct discarded bytes. This
  * catches accel's extra dummy-byte handling, burst offsets and CS mistakes. */
@@ -19,6 +22,7 @@ static HAL_StatusTypeDef sensor_spi(const uint8_t *tx, uint8_t *rx,
     unsigned prefix = accel ? 2U : 1U, reg = tx[0] & 0x7FU, i;
     assert(test_critical_depth == 0 && timeout == 1);
     assert(test_spi_cs == BMI088_ACC_CS_Pin || test_spi_cs == BMI088_GYRO_CS_Pin);
+    if(trigger_during_spi){ trigger_during_spi=0; Bmi088_NotifyFromISR(); }
     if (test_spi_calls == fail_call) { hspi2.ErrorCode = 0x20; return fail_status; }
     memset(rx, 0xDA, size);
     if (tx[0] & 0x80U) {
@@ -49,21 +53,34 @@ static void model_reset(uint32_t tick)
     registers[0][0x10] = 0x80;
     memset(last_written, 0xFF, sizeof(last_written));
     test_tick = tick; test_spi_cs = 0; test_spi_calls = test_spi_cs_release_count = 0;
-    fail_call = 0; bad_config = 0; accel_spi_mode = 0;
+    fail_call = 0; bad_config = 0; accel_spi_mode = 0;trigger_during_spi=0;
     test_spi_hook = sensor_spi;
+    test_dwt.CYCCNT=0;
+    test_timer_init_status=test_timer_start_status=HAL_OK;
+    test_timer_init_calls=test_timer_start_calls=test_timer_stop_calls=test_timer_started=0;
+    test_notify_calls=0;test_notify_task=NULL;
     Bmi088_Init(HAL_OK);
+    assert(Bmi088_StartSampling((TaskHandle_t)1)==HAL_OK);
+}
+
+/* Simulate a timer-driven task call; the real event ISR never touches SPI. */
+static void event_process(void)
+{
+    unsigned calls=test_spi_calls;
+    Bmi088_NotifyFromISR();assert(test_spi_calls==calls);
+    Bmi088_Process();
 }
 
 static void ready(void)
 {
     unsigned n;
     for (n = 0; n < 400 && g_bmi088_stats.stage != BMI088_RUNNING; n++) {
-        Bmi088_Process(); test_tick++;
+        event_process(); test_tick++;
     }
     assert(g_bmi088_stats.stage == BMI088_RUNNING);
     assert(g_bmi088_stats.init_success_count && g_bmi088_data.initialized);
     assert(!test_spi_cs && test_spi_calls == test_spi_cs_release_count);
-    assert(registers[1][0x40] == 0xAB && registers[0][0x10] == 0x82);
+    assert(registers[1][0x40] == 0xAC && registers[0][0x10] == 0x81);
 }
 
 static void put_i16(unsigned accel, unsigned reg, int value)
@@ -108,7 +125,7 @@ int main(void)
     for (test_tick = 1; test_tick < 80; test_tick++) Bmi088_Process();
     assert(test_spi_calls == calls); /* Reset wait neither spins nor uses SPI. */
     ready(); assert(!g_bmi088_data.has_sample && !g_bmi088_data.valid);
-    measurement(-80); Bmi088_Process(); Bmi088_GetData(&data);
+    measurement(-80); event_process(); Bmi088_GetData(&data);
     assert(data.has_sample && data.valid && data.age_ms == 0 && data.sample_count == 1);
     assert(data.temperature_raw == -80 && data.temperature_c == 13);
     assert(data.calibration_version == BMI088_CALIBRATION_VERSION);
@@ -122,20 +139,20 @@ int main(void)
     assert(!memcmp(old.accel_m_s2, data.accel_m_s2, 12));
     calls = test_spi_calls; Bmi088_Process(); assert(test_spi_calls == calls);
     /* Canonical fields are already corrected; no body rotation/filtering. */
-    test_tick++; measurement(80); put_i16(0, 2, 100); Bmi088_Process(); Bmi088_GetData(&data);
+    test_tick++; measurement(80); put_i16(0, 2, 100); event_process(); Bmi088_GetData(&data);
     assert(data.gyro_rad_s[0] == expected_gyro(100,0,33));
     assert(data.temperature_c == 33 && data.sample_count == 2);
     assert(data.compensation_in_range && data.compensation_temperature_c == 33);
     test_tick += 19; Bmi088_GetData(&data); assert(data.valid && data.age_ms == 19);
     test_tick++; Bmi088_GetData(&data); assert(!data.valid && data.age_ms == 20);
-    Bmi088_Process(); Bmi088_GetData(&data); assert(data.valid && data.sample_count == 3);
+    event_process(); Bmi088_GetData(&data); assert(data.valid && data.sample_count == 3);
 
     /* Every HAL failure releases CS and publishes none of a partial read. */
     for (status = HAL_ERROR; status <= HAL_TIMEOUT; status++) {
-        model_reset(100); ready(); measurement(0); Bmi088_Process(); Bmi088_GetData(&old);
+        model_reset(100); ready(); measurement(0); event_process(); Bmi088_GetData(&old);
         put_i16(1, 0x12, 9999); test_tick++;
         fail_call = test_spi_calls + 3; fail_status = (HAL_StatusTypeDef)status;
-        Bmi088_Process(); Bmi088_GetData(&data);
+        event_process(); Bmi088_GetData(&data);
         assert(!test_spi_cs && test_spi_calls == test_spi_cs_release_count);
         assert(!data.valid && !data.initialized && data.has_sample);
         assert(data.error == BMI088_ERROR_SPI && data.sample_count == old.sample_count);
@@ -144,7 +161,7 @@ int main(void)
         assert(data.calibration_version == old.calibration_version);
         assert(g_bmi088_stats.read_error_count == 1 && g_bmi088_stats.spi_error_count == 1);
         calls = test_spi_calls; test_tick += 999; Bmi088_Process(); assert(test_spi_calls == calls);
-        fail_call = 0; test_tick++; ready(); Bmi088_Process(); Bmi088_GetData(&data);
+        fail_call = 0; test_tick++; ready(); event_process(); Bmi088_GetData(&data);
         assert(data.valid && data.accel_m_s2[0] == expected_accel(9999,0) && data.sample_count == old.sample_count + 1);
     }
     model_reset(100); registers[1][0] = 0; Bmi088_Process();
@@ -152,16 +169,16 @@ int main(void)
     model_reset(100); bad_config = 1;
     for (n = 0; n < 200 && g_bmi088_stats.stage != BMI088_RETRY_WAIT; n++) { Bmi088_Process(); test_tick++; }
     assert(g_bmi088_data.error == BMI088_ERROR_ACCEL_CONFIG && !g_bmi088_data.initialized);
-    model_reset(100); ready(); measurement(0); registers[0][0] = 0; Bmi088_Process();
+    model_reset(100); ready(); measurement(0); registers[0][0] = 0; event_process();
     assert(g_bmi088_data.error == BMI088_ERROR_GYRO_ID && !g_bmi088_data.has_sample);
     Bmi088_Init(HAL_ERROR); calls = test_spi_calls; Bmi088_Process(); assert(test_spi_calls == calls);
     assert(g_bmi088_stats.stage == BMI088_DISABLED && !g_bmi088_data.valid);
     Bmi088_OnTaskCreationFailure(); assert(g_bmi088_data.error == BMI088_ERROR_TASK);
-    model_reset(UINT32_MAX - 20U); ready(); measurement(-1024); Bmi088_Process(); Bmi088_GetData(&data);
+    model_reset(UINT32_MAX - 20U); ready(); measurement(-1024); event_process(); Bmi088_GetData(&data);
     assert(data.temperature_raw == -1024 && data.temperature_c == -105);
     test_tick = UINT32_MAX - 2U; g_bmi088_data.sample_tick_ms = test_tick;
     test_tick = 1U; Bmi088_GetData(&data); assert(data.age_ms == 4 && data.valid);
-    g_bmi088_data.sample_count = UINT32_MAX; s_due_tick = test_tick; Bmi088_Process();
+    g_bmi088_data.sample_count = UINT32_MAX; s_due_tick = test_tick; event_process();
     assert(g_bmi088_data.has_sample && g_bmi088_data.sample_count == 0);
     assert(test_critical_depth == 0);
     /* Independent +/- XYZ gravity fixtures at the 40 C reference. */
@@ -209,5 +226,46 @@ int main(void)
       }
     }
     puts("PASS BMI088 SPI/init/recovery, canonical calibrated gyro/accel, warm-up compensation/bounds, single application, 6-face gravity, tick wrap");
+    /* Two reads inside one HAL millisecond: target 2 kHz without changing the
+       system tick. No extra event => no extra transaction or double publish. */
+    model_reset(100);ready();measurement(136);
+    { uint32_t base_tick=test_tick;
+      for(n=1;n<=4000;n++) {
+        test_dwt.CYCCNT=n*500U*480U;test_tick=base_tick+(n*500U)/1000U;
+        event_process();
+      }
+      assert(g_bmi088_data.sample_count==4000);
+      assert(g_bmi088_stats.read_hz>=1998 && g_bmi088_stats.read_hz<=2002);
+      assert(g_bmi088_stats.last_read_interval_us==500 && g_bmi088_stats.max_read_interval_us==500);
+      calls=test_spi_calls;Bmi088_Process();assert(test_spi_calls==calls);
+      Bmi088_NotifyFromISR();Bmi088_NotifyFromISR();Bmi088_NotifyFromISR();
+      calls=g_bmi088_data.sample_count;Bmi088_Process();
+      assert(g_bmi088_data.sample_count==calls+1 && g_bmi088_stats.skipped_trigger_count==2);
+      trigger_during_spi=1;event_process();calls=test_spi_calls;Bmi088_Process();
+      assert(test_spi_calls==calls && g_bmi088_stats.skipped_trigger_count==3);
+      test_tick+=20;calls=test_spi_calls;Bmi088_OnSamplingTimeout();Bmi088_GetData(&data);
+      assert(test_spi_calls==calls && !data.valid && g_bmi088_stats.sampling_timeout_count==1);
+      g_bmi088_stats.timer_irq_count=s_consumed_trigger=UINT32_MAX;
+      event_process();assert(g_bmi088_stats.timer_irq_count==0 && g_bmi088_data.valid);
+      test_tick+=2000;Bmi088_OnSamplingTimeout();test_tick+=1000;Bmi088_OnSamplingTimeout();
+      assert(g_bmi088_stats.read_hz==0);
+    }
+    model_reset(100);ready();measurement(136);test_dwt.CYCCNT=UINT32_MAX-100U;
+    event_process();test_dwt.CYCCNT+=500U*480U;event_process();
+    assert(g_bmi088_stats.last_read_interval_us==500);
+    for(status=HAL_ERROR;status<=HAL_TIMEOUT;status++) {
+      model_reset(100);test_timer_init_status=(HAL_StatusTypeDef)status;
+      assert(Bmi088_StartSampling((TaskHandle_t)1)==status);
+      assert(g_bmi088_data.error==BMI088_ERROR_TIMER && !g_bmi088_stats.timer_running);
+      calls=test_spi_calls;Bmi088_NotifyFromISR();Bmi088_Process();assert(test_spi_calls==calls);
+      model_reset(100);test_timer_start_status=(HAL_StatusTypeDef)status;
+      assert(Bmi088_StartSampling((TaskHandle_t)1)==status && g_bmi088_data.error==BMI088_ERROR_TIMER);
+      assert(!test_timer_started && !g_bmi088_stats.timer_running);
+    }
+    model_reset(100);test_dwt.CYCCNT=123456;
+    assert(Bmi088_StartSampling((TaskHandle_t)1)==HAL_OK && test_dwt.CYCCNT==123456);
+    assert(Bmi088_StartSampling(NULL)==HAL_ERROR);
+    Bmi088_OnTaskCreationFailure();assert(!g_bmi088_stats.timer_running && !test_timer_started);
+    puts("PASS 4000 half-ms timer events, 2 kHz rate, IRQ-only notify/coalescing, stalled freshness, wrap, timer failures and shared DWT preservation");
     return 0;
 }
