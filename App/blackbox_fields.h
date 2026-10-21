@@ -1,6 +1,6 @@
 #ifndef BLACKBOX_FIELDS_H
 #define BLACKBOX_FIELDS_H
-#include "../../references/blackbox_protocol/sbb3.h"
+#include "blackbox_protocol.h"
 #include "vofa.h"
 #include "bmi088.h"
 #include "bmi088_attitude.h"
@@ -49,8 +49,12 @@ static const BlackboxField s_fields[] = {
     BF("bmi088_attitude_epoch","",178,1,SBB_U32),
     BF("bmi088_attitude_accel_used","",182,1,SBB_U8),
     BF("bmi088_attitude_error","",183,1,SBB_U8),
+    BF("bmi088_gyro_filtered_deg_s","deg/s",184,3,SBB_F32),
+    BF("bmi088_gyro_filter_valid","",196,1,SBB_U8),
+    BF("bmi088_gyro_filter_cutoff_hz","Hz",197,1,SBB_F32),
+    BF("bmi088_gyro_filter_sample_hz","Hz",201,1,SBB_F32),
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    BF("new_float","test",184,1,SBB_F32), BF("new_uint32","test",188,1,SBB_U32), BF("new_array","test",192,3,SBB_I16),
+    BF("new_float","test",205,1,SBB_F32), BF("new_uint32","test",209,1,SBB_U32), BF("new_array","test",213,3,SBB_I16),
 #endif
 };
 #undef BF
@@ -84,8 +88,9 @@ static void Blackbox_Sample(uint8_t *payload)
     static FlightControlState_t flight;static RcSbusData_t rc;static EscPwmState_t esc;static OpticalFlowData_t optical;
     static Bmi088Data_t bmi;
     static Bmi088AttitudeState_t attitude;
+    static Bmi088GyroFilterState_t filter;
     FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);OpticalFlow_GetData(&optical);
-    Bmi088_GetSnapshot(&bmi, &attitude);
+    Bmi088_GetSnapshotWithFilter(&bmi, &filter, &attitude);
     memset(payload,0,s_payload_size);
     /* Existing builder supplies the unchanged base and exact optical bytes.
      * Its legacy tail is outside the baseline payload and overwritten below/CRC. */
@@ -109,9 +114,16 @@ static void Blackbox_Sample(uint8_t *payload)
       memcpy(payload+165,&roll,4);memcpy(payload+169,&pitch,4);memcpy(payload+173,&yaw,4); }
     payload[177]=attitude.valid;sbb_p32(payload+178,attitude.epoch);
     payload[182]=attitude.accel_used;payload[183]=attitude.error;
+    { unsigned axis;
+      for(axis=0;axis<3;axis++) {
+          const float rate_deg_s=filter.gyro_rad_s[axis]*57.295779513f;
+          memcpy(payload+184+4*axis,&rate_deg_s,4);
+      } }
+    payload[196]=filter.valid;
+    memcpy(payload+197,&filter.cutoff_hz,4);memcpy(payload+201,&filter.applied_sample_hz,4);
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    { const float v=1.25f;memcpy(payload+184,&v,4);sbb_p32(payload+188,0xfffffffeU);
-      sbb_p16(payload+192,(uint16_t)-32768);sbb_p16(payload+194,0);sbb_p16(payload+196,32767); }
+    { const float v=1.25f;memcpy(payload+205,&v,4);sbb_p32(payload+209,0xfffffffeU);
+      sbb_p16(payload+213,(uint16_t)-32768);sbb_p16(payload+215,0);sbb_p16(payload+217,32767); }
 #endif
 }
 #endif

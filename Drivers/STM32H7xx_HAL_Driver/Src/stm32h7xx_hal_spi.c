@@ -135,6 +135,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32h7xx_hal.h"
+#include "stm32h7xx_spi1_eot_guard.h"
 
 /** @addtogroup STM32H7xx_HAL_Driver
   * @{
@@ -145,6 +146,9 @@
   * @{
   */
 #ifdef HAL_SPI_MODULE_ENABLED
+
+/* SPI1 SD: completed byte observed after a task-preemption deadline. */
+volatile uint32_t g_spi1_completed_after_deadline_count;
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private defines -----------------------------------------------------------*/
@@ -1417,6 +1421,15 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, const uint8_t
       /* Timeout management */
       if ((((HAL_GetTick() - tickstart) >=  Timeout) && (Timeout != HAL_MAX_DELAY)) || (Timeout == 0U))
       {
+        /* A higher-priority task may preempt between TX and the final RX.
+         * For SD SPI1, consume already-available data before treating elapsed
+         * wall time as a transfer failure. EOT/error checking still follows. */
+        if ((hspi->Instance == SPI1) && (Timeout != 0U) &&
+            (initial_TxXferCount == 0U) && (initial_RxXferCount == 0U))
+        {
+          g_spi1_completed_after_deadline_count++;
+          break;
+        }
         /* Call standard close procedure with error check */
         SPI_CloseTransfer(hspi);
 
@@ -3771,6 +3784,9 @@ static void SPI_AbortTransfer(SPI_HandleTypeDef *hspi)
 static void SPI_CloseTransfer(SPI_HandleTypeDef *hspi)
 {
   uint32_t itflag = hspi->Instance->SR;
+
+  /* SD SPI1 only: ES0491 2.21.5, complete the last clock before SPE=0. */
+  SPI1_SD_EotGuard(hspi);
 
   __HAL_SPI_CLEAR_EOTFLAG(hspi);
   __HAL_SPI_CLEAR_TXTFFLAG(hspi);

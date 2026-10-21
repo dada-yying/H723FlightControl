@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "../../ThirdParty/Fusion/FusionAhrs.c"
+#include "../../App/bmi088_gyro_filter.c"
 #include "../../App/bmi088_attitude.c"
 #include "../../App/bmi088.c"
 

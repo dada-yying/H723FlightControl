@@ -21,6 +21,7 @@
 #include "flight_control.h"
 #include "vofa.h"
 #include "blackbox.h"
+#include "storage/blackbox_storage.h"
 #include "optical_flow.h"
 #include "usart.h"
 #include "fdcan.h"
@@ -63,6 +64,10 @@ osThreadId_t rcTaskHandle;
 osThreadId_t opticalFlowTaskHandle;
 osThreadId_t bmi088TaskHandle;
 osThreadId_t blackboxTaskHandle;
+osThreadId_t blackboxStorageTaskHandle;
+const osThreadAttr_t blackboxStorageTask_attributes={
+  .name="BlackboxStorage", .stack_size=4096, .priority=osPriorityNormal
+};
 const osThreadAttr_t blackboxTask_attributes = {
   .name = "BlackboxTask", .stack_size = 1024,
   .priority = (osPriority_t) osPriorityNormal2,
@@ -107,6 +112,7 @@ void StartRcTask(void *argument);
 void StartFlightControlTask(void *argument);
 void StartBmi088Task(void *argument);
 void StartBlackboxTask(void *argument);
+void StartBlackboxStorageTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -151,6 +157,8 @@ void MX_FREERTOS_Init(void) {
   if (opticalFlowTaskHandle == NULL) OpticalFlow_Init(HAL_ERROR);
   bmi088TaskHandle = osThreadNew(StartBmi088Task, NULL, &bmi088Task_attributes);
   if (bmi088TaskHandle == NULL) Bmi088_OnTaskCreationFailure();
+  blackboxStorageTaskHandle=osThreadNew(StartBlackboxStorageTask,NULL,&blackboxStorageTask_attributes);
+  if(blackboxStorageTaskHandle==NULL)BlackboxStorage_TaskFailed();
   blackboxTaskHandle = osThreadNew(StartBlackboxTask, NULL, &blackboxTask_attributes);
   if (blackboxTaskHandle == NULL) Blackbox_OnTaskCreationFailure();
 
@@ -292,8 +300,7 @@ void StartBlackboxTask(void *argument)
   (void)Blackbox_StartRecording(xTaskGetCurrentTaskHandle());
   for (;;)
   {
-    /* 700 Hz TIM4 notifications, independent of FlightControl/IMU updates.
-     * Timeout wakes only maintain UART/schema; they never invent DATA slots. */
+    /* 1 kHz capture; storage runs independently below sensor/control priorities. */
     (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
     Blackbox_ProcessPending();
     g_blackbox_tx_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
@@ -316,3 +323,14 @@ void StartBmi088Task(void *argument)
 }
 
 /* USER CODE END Application */
+
+void StartBlackboxStorageTask(void *argument)
+{
+  (void)argument;
+  for(;;) {
+    BlackboxStorage_Process();
+    g_blackbox_stats.stack_free_words=uxTaskGetStackHighWaterMark(NULL);
+    g_blackbox_stats.heap_free_bytes=xPortGetFreeHeapSize();
+    vTaskDelay(1);
+  }
+}

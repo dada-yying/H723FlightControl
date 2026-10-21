@@ -1,3 +1,4 @@
+#include "storage/sd_spi.h"
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -238,13 +239,11 @@ void UART5_IRQHandler(void)
 
 void DMA1_Stream1_IRQHandler(void)
 {
-  HAL_DMA_IRQHandler(&hdma_uart7_tx);
+  HAL_DMA_IRQHandler(&hdma_spi1_tx);
 }
 
-void UART7_IRQHandler(void)
-{
-  HAL_UART_IRQHandler(&huart7);
-}
+void DMA1_Stream3_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_spi1_rx); }
+void SPI1_IRQHandler(void) { HAL_SPI_IRQHandler(&hspi1_sd); }
 
 void DMA1_Stream2_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_usart10_rx); }
 void USART10_IRQHandler(void) { HAL_UART_IRQHandler(&huart10); }

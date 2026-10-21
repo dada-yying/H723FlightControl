@@ -31,12 +31,14 @@ static void pose(float roll, float nose_down, float roll_rate, float nose_down_r
 static void feed(unsigned us)
 {
     const Bmi088AttitudeState_t *estimate;
+    const Bmi088GyroFilterState_t *filter;
     input.sample_count++;
     simulated_us += us; test_tick = initial_tick + (uint32_t)(simulated_us / 1000U);
     input.sample_tick_ms = test_tick; test_dwt.CYCCNT += us * 480U;
-    estimate = Bmi088Attitude_Compute(&input, test_dwt.CYCCNT);
+    filter = Bmi088GyroFilter_Compute(&input, test_dwt.CYCCNT);
+    estimate = Bmi088Attitude_Compute(&input, filter, test_dwt.CYCCNT);
     taskENTER_CRITICAL();
-    g_bmi088_data = input; g_bmi088_attitude_state = *estimate;
+    g_bmi088_data = input; g_bmi088_gyro_filter = *filter; g_bmi088_attitude_state = *estimate;
     taskEXIT_CRITICAL();
 }
 
@@ -57,6 +59,7 @@ int main(void)
     unsigned axis, sign, i;
     Bmi088AttitudeState_t state, before;
     Bmi088Data_t raw;
+    Bmi088GyroFilterState_t filtered;
     /* Zero tick/count/first identity, non-level startup, and inverted startup. */
     attitude_reset(0, 0);
     Bmi088Attitude_GetState(&state); assert(!state.valid && state.age_ms == UINT32_MAX);
@@ -66,7 +69,8 @@ int main(void)
     assert(fabsf(g_bmi088_attitude_state.roll_rad - .3f) < 2e-5f);
     assert(fabsf(g_bmi088_attitude_state.pitch_rad + .2f) < 2e-5f);
     assert(fabsf(g_bmi088_attitude_state.yaw_rad) < 2e-5f);
-    Bmi088_GetSnapshot(&raw, &state);
+    Bmi088_GetSnapshotWithFilter(&raw, &filtered, &state);
+    assert(filtered.valid && raw.sample_count == filtered.sample_count && raw.sample_tick_ms == filtered.sample_tick_ms);
     assert(raw.sample_count == state.sample_count && raw.sample_tick_ms == state.sample_tick_ms);
     assert(!memcmp(raw.gyro_rad_s, input.gyro_rad_s, sizeof(input.gyro_rad_s)));
     assert(!memcmp(raw.accel_m_s2, input.accel_m_s2, sizeof(input.accel_m_s2)));
@@ -98,7 +102,9 @@ int main(void)
             assert(fabsf(g_bmi088_attitude_state.dt_s - us * 1e-6f) < 1e-8f);
         }
         Bmi088Attitude_GetState(&state);
-        assert(fabsf(wrapped_error(axis == 0 ? state.roll_rad : axis == 1 ? state.pitch_rad : state.yaw_rad, angle)) < .002f);
+        /* The 50 Hz second-order LPF adds about 4.5 ms low-frequency delay;
+         * the previous unfiltered 0.002 rad tolerance would reject that delay. */
+        assert(fabsf(wrapped_error(axis == 0 ? state.roll_rad : axis == 1 ? state.pitch_rad : state.yaw_rad, angle)) < .005f);
         assert(axis == 0 || fabsf(state.roll_rad) < .001f);
         assert(axis == 1 || fabsf(state.pitch_rad) < .001f);
         assert(axis == 2 || fabsf(state.yaw_rad) < .001f);
@@ -126,12 +132,17 @@ int main(void)
     }
     /* Yaw wraps at +/-pi; relative rotation remains correct, not clamped. */
     attitude_reset(0, 0); settle(0, 0);
-    for (i = 0; i < 8000; i++) { pose(0, 0, 0, 0, 1); feed(500); }
+    { double filtered_integral=0;
+      for (i = 0; i < 8000; i++) {
+        pose(0, 0, 0, 0, 1); feed(500);
+        filtered_integral-=g_bmi088_gyro_filter.gyro_rad_s[2]*.0005;
+      }
+      assert(fabsf(wrapped_error(g_bmi088_attitude_state.yaw_rad,(float)filtered_integral))<.001f); }
     Bmi088Attitude_GetState(&state);
-    assert(state.yaw_rad < 0 && fabsf(wrapped_error(state.yaw_rad, 4)) < .001f);
+    assert(state.yaw_rad < 0 && fabsf(wrapped_error(state.yaw_rad, 4)) < .006f);
     /* Duplicate count is no update, count rollover is still a fresh sample. */
     before = state; input.gyro_rad_s[1] = 1;
-    Bmi088Attitude_Compute(&input, test_dwt.CYCCNT + 240000U);
+    Bmi088Attitude_Compute(&input, &s_gyro_filter, test_dwt.CYCCNT + 240000U);
     assert(s_attitude.update_count == before.update_count);
     s_count = input.sample_count = UINT32_MAX; pose(0, 0, 0, 0, .5f); feed(500);
     assert(input.sample_count == 0 && g_bmi088_attitude_state.update_count == before.update_count + 1);
@@ -193,6 +204,8 @@ int main(void)
     for (i = 0; i < 120; i++) { test_dwt.CYCCNT += 240000U; test_tick += i & 1U; event_process(); }
     Bmi088_GetSnapshot(&raw, &state);
     assert(raw.valid && state.valid && raw.sample_count == state.sample_count && raw.sample_tick_ms == state.sample_tick_ms);
+    Bmi088_GetSnapshotWithFilter(&raw, &filtered, &state);
+    assert(filtered.valid && filtered.sample_count == raw.sample_count && filtered.sample_tick_ms == raw.sample_tick_ms);
     assert(raw.calibration_version == BMI088_CALIBRATION_VERSION && fabsf(state.roll_rad) < .002f && fabsf(state.pitch_rad) < .002f);
     fail_call = test_spi_calls + 1; fail_status = HAL_ERROR; event_process();
     Bmi088_GetSnapshot(&raw, &state); assert(!raw.valid && !state.valid);

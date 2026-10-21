@@ -7,6 +7,8 @@
 
 #define BMI088_SAMPLE_TIMEOUT_MS 20U
 #define BMI088_READ_PERIOD_US 500U
+/* Preserve the existing AHRS saturation rejection, also used before filtering. */
+#define BMI088_GYRO_VALID_LIMIT_RAD_S 34.55751919f /* 99% of 2000 deg/s. */
 
 typedef enum {
     BMI088_ERROR_NONE = 0,
@@ -94,6 +96,7 @@ extern volatile Bmi088Data_t g_bmi088_data;
 extern volatile Bmi088Stats_t g_bmi088_stats;
 extern const Bmi088Calibration_t g_bmi088_calibration;
 struct Bmi088AttitudeState;
+struct Bmi088GyroFilterState;
 
 void Bmi088_Init(HAL_StatusTypeDef spi_init_status); /* Startup, before tasks. */
 HAL_StatusTypeDef Bmi088_StartSampling(TaskHandle_t task); /* Running task only. */
@@ -102,6 +105,8 @@ void Bmi088_OnSamplingTimeout(void); /* No stale-read fallback/catch-up. */
 void Bmi088_Process(void); /* Sole SPI2 owner: notified Bmi088Task, target 2 kHz. */
 void Bmi088_GetData(Bmi088Data_t *data); /* Short, consistent snapshot. */
 void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude);
+void Bmi088_GetSnapshotWithFilter(Bmi088Data_t *data, struct Bmi088GyroFilterState *filter,
+                                struct Bmi088AttitudeState *attitude);
 void Bmi088_OnTaskCreationFailure(void);
 
 #endif

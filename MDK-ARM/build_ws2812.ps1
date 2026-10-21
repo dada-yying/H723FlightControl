@@ -1,4 +1,5 @@
-param([string]$OutputDirectory = 'ws2812-hal-verified')
+param([string]$OutputDirectory = 'ws2812-hal-verified',
+      [ValidateSet('0','1','2','3')][string]$Optimization = '3')
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
@@ -9,7 +10,8 @@ try {
     try {
         $project = [xml](Get-Content -Raw 'CtrlBoard-H7.uvprojx')
         $ctl = $project.Project.Targets.Target.TargetOption.TargetArmAds.Cads.VariousControls
-        $ccArgs = @('--cpu=Cortex-M7.fp.dp', '--c99', '--gnu', '-O3', '--split_sections', '-g', '-c')
+        $ccArgs = @('--cpu=Cortex-M7.fp.dp', '--c99', '--gnu', "-O$Optimization", '--split_sections', '-g', '-c')
+        Write-Output "ARMCC optimization: -O$Optimization (project settings are not rewritten)"
         foreach ($inc in $ctl.IncludePath.Split(';')) { $ccArgs += @('-I', $inc) }
         foreach ($def in $ctl.Define.Split(',')) { $ccArgs += @('-D', $def) }
         $objects = @()

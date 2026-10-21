@@ -45,34 +45,14 @@ PID 与 CH8/10/12 共用最终滤波反馈，CH10 同步体现修正后的 Pitch
 CH8 与 CH13 从同一次飞控快照取值。CH13 仅供观察，不替代 PID 反馈。
 两者均以 100 Hz 抽样发送，不是完整的高频原始数据记录；比较滤波效果时可同时观察 CH7、CH8、CH13。
 
-## UART7 黑匣子
+## SPI-SD 黑匣子
 
-- PE8 / AF7 / UART7_TX：2000000、8N1、仅发送、无流控、不反相；接黑匣子 RX 并共地，接收端必须兼容 3.3 V UART 电平。
-- USART1 保持 230400 / 100 Hz / 23 float / 96字节；UART7为自描述SBB3、当前载荷184字节/包长212字节，包含BMI和光流。详见 ../../BLACKBOX_V3.md。
-- BlackboxTask由TIM4独立触发，目标700Hz，与FlightControl_Run/ATOM通知脱钩。锁定或IMU断流仍记录最新快照和状态/年龄；不补算或补帧，不伪造新传感器样本。
-- 当前DATA为148.4kB/s，占2Mbps的74.2%，单包约1060µs；字段定义另占带宽和时隙。发送完成不代表已落盘。
-- 使用 DMA1_Stream1 / UART7_TX，IRQ 优先级 6；保留 UART5 的 Stream0。仅 UART TC 完成回调释放在途缓冲，忙时丢本次帧、不覆盖、不排队。
-- 512字节缓冲独占16个缓存行，32字节对齐，`.blackbox_dma`显式放入AXI SRAM；按实际包长发送，开启D-Cache时清理完整512字节。不能搬入DTCM。
-- 发送忙超过5ms或UART7错误，在黑匣子任务中非阻塞中止；中止再超过5ms或返回失败则本次上电禁用记录。10ms通知超时唤醒只维护定义/恢复，不产生DATA。
-- UART/任务/TIM4初始化失败只禁用黑匣子，不修改PID/滤波/电机安全规则。无确认、无重传；SBB3保留发送序号和采集时间。
-
-Watch：`g_blackbox_tx_stats.initialized/busy/disabled/state`，
-`submitted_count/completed_count/busy_drop_count/error_count/timeout_count/abort_count`，
-`last_status/last_uart_error`。状态依次为 DISABLED=0、IDLE=1、SENDING=2、RECOVER=3、ABORTING=4。
-`last_status` 是最近发送/中止 API 状态；UART 错误码保留在 `last_uart_error`。成功中止可将 last_status 更新为 HAL_OK，须结合计数看历史故障。
-
-主机测试 `test_blackbox.c` 编译真实组帧、黑匣子、RC、飞控和电调源码，模拟 DMA 启动/中止与 UART 完成/错误回调：
-核对两路相同输入的基础 20 通道及各自扩展帧、旧接口兼容、锁定归零、缓冲区持有、cache 调用、忙丢帧、5 ms 边界、同步/异步中止、tick 回绕及 UART5 回调分流。
-HAL 外设行为、链接地址和真实时序不由这些桩测试证明。ARMCC 构建：`MDK-ARM/build_ws2812.ps1 -OutputDirectory optical-flow-verified`。
-独立700Hz构建通过59个源文件，黑匣子缓冲0x24000000/512字节，满足AXI SRAM及32字节对齐。
-静态栈：BlackboxTask 204/1024、FlightControlTask 364/1024、默认任务504/1024；七个应用任务分配7440/15360堆字节。仍需实机高水位检查。
-CubeMX 再生成后需复核自定义 UART7 非致命错误返回、黑匣子调用点和 scatter 段，不能只保留自动生成初始化。
-
-`test_blackbox_schedule.c`覆盖100秒无漂移的1428/1429µs节拍、ISR不组帧、通知合并/不补发、在途缓存不覆盖、锁定/断流持续记录、最大包限频、定义周期恢复及任务/定时器本地失败。
-
-实机拆桨验收至少 60 秒：USART1 仍约 100 Hz；UART7 提交/完成帧数接近实际飞控更新数，忙丢帧、错误与超时计数不增长，飞控频率保持正常。
-检查线缆帧可按 116 字节解析、F407 V2 日志可用新版工具恢复、数据单位及四路电机顺序正确；检查锁定记录、IMU 停止后不再提交新帧、原电机保护照常生效。
-静态调用栈深度须低于任务配置，运行时仍应复核任务栈高水位；编译通过不等于 DMA/USB/存储链路或飞行稳定性已验证。
+当前记录方式为H723 SPI1直接写FAT32 SD卡，TIM4独立1kHz采样。
+USART1 VOFA不变；UART7不再发送。详见 ../../BLACKBOX_V3.md。
+test_blackbox.c验证现有字段、单位与SD入队；test_blackbox_schedule.c验证
+100秒定时、通知合并、不补发、锁定/断流记录、队列拒绝和故障隔离。
+../run_sd.ps1覆盖SPI协议/CRC/DMA超时及真实FatFs恢复，基础与扩展字段
+分别经未修改的通用转换工具恢复。物理SD、信号时序及飞行效果需实机验证。
 
 ## 角速度一维卡尔曼滤波参数
 
@@ -178,7 +158,7 @@ gravity-norm thermal fitting and equal recording weights. The real-log analysis
 uses leave-one-recording-out validation and rejects poorly repeatable accel
 thermal models; colder incomplete coverage is reported, not silently validated.
 
-Blackbox regression now checks a 184-byte payload/212-byte wire DATA packet,
+Blackbox regression now checks a 205-byte payload/233-byte wire DATA packet,
 the added independent BMI attitude/status, capture time only in the header/CSV sample_time_us, and removal
 of the duplicate Celsius-convertible temperature counts. The calibrated BMI
 values/metadata and optical bytes are unchanged. Schema periodic recovery,
@@ -193,3 +173,16 @@ It also rejects non-finite/saturated inputs, zero dt and numerical corruption.
 The 500us timer fixture runs 4000 acquisition events without changing RTOS tick,
 coalesces old triggers and covers timer init/start failures. None proves physical
 2kHz timing, attitude accuracy or flying safety. Check live read_hz/stack headroom.
+
+`test_bmi088_gyro_filter.c` tests the actual three-axis single-precision DF-I
+Butterworth against an independent double-precision sin/cos coefficient/reference
+recurrence and analytic frequency response. Covers exact first-value seeding,
+positive/negative steps, DC/5/50/200 Hz gains, independent axes, duplicate counts,
+128-interval/three-window rate changes, ordinary jitter, unsupported Nyquist
+rates, NaN/Inf/invalid coefficients/numerical corruption, timeout/init recovery,
+tick/DWT/count wrap, raw preservation, PID-reset isolation and filtered AHRS input.
+The logger retains raw deg/s fields and adds filtered deg/s/valid/cutoff/design
+rate. Full H723/F407/CSV fixtures check these through unchanged receiver/tools.
+Current ARMCC static BMI task depth is 360/1024 (was 352); this is not runtime
+WCET/stack proof. The heater's pre-existing old-parameter assertion is reported
+separately; production heater/calibration/ATOM paths are not altered by the LPF.

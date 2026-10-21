@@ -2,6 +2,7 @@
 #define BMI088_ATTITUDE_H
 
 #include "bmi088.h"
+#include "bmi088_gyro_filter.h"
 
 typedef enum {
     BMI088_ATTITUDE_WAIT_SOURCE = 0,
@@ -33,6 +34,7 @@ void Bmi088Attitude_Invalidate(void); /* Sole owner: Bmi088Task. */
  * Caller atomically publishes returned state AND its matching BMI sample.
  * Returned pointer is private workspace, only the BMI acquisition owner uses it. */
 const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
+                                                  const Bmi088GyroFilterState_t *filter,
                                                   uint32_t completion_cycle);
 void Bmi088Attitude_GetState(Bmi088AttitudeState_t *state);
 

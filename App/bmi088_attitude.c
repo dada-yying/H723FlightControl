@@ -9,7 +9,6 @@
 #define BMI_ATTITUDE_ALIGN_MS 50U
 #define BMI_ATTITUDE_ALIGN_SAMPLES 64U
 #define BMI_ATTITUDE_ALIGN_RATE_RAD_S 0.1745329252f /* 10 deg/s */
-#define BMI_ATTITUDE_GYRO_LIMIT_RAD_S 34.55751919f /* 99% of 2000 deg/s */
 
 volatile Bmi088AttitudeState_t g_bmi088_attitude_state;
 static Bmi088AttitudeState_t s_attitude;
@@ -98,6 +97,7 @@ static void BmiAttitude_Align(FusionVector acceleration)
 }
 
 const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
+                                                  const Bmi088GyroFilterState_t *filter,
                                                   uint32_t completion_cycle)
 {
     FusionVector accel, gyro;
@@ -109,7 +109,13 @@ const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
         return &s_attitude;
     }
     /* Never integrate the same published sample twice (count zero is valid). */
-    if (s_seen && sample->sample_count == s_count) return &s_attitude;
+    if (s_seen && sample->sample_count == s_count) {
+        if (!filter || !filter->valid || !filter->initialized ||
+            filter->sample_count != sample->sample_count || filter->sample_tick_ms != sample->sample_tick_ms) {
+            BmiAttitude_Reset(BMI088_ATTITUDE_SOURCE_INVALID); s_seen = 0;
+        }
+        return &s_attitude;
+    }
     elapsed_ms = (uint32_t)(sample->sample_tick_ms - s_tick);
     cycles = (uint32_t)(completion_cycle - s_cycle);
     dt = s_seen && SystemCoreClock ? (float)cycles / (float)SystemCoreClock : 0;
@@ -122,23 +128,32 @@ const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
             s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_BAD_INPUT);
             return &s_attitude;
         }
-        if (fabsf(sample->gyro_rad_s[i]) >= BMI_ATTITUDE_GYRO_LIMIT_RAD_S) {
+        if (fabsf(sample->gyro_rad_s[i]) >= BMI088_GYRO_VALID_LIMIT_RAD_S) {
             s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_GYRO_OVERRANGE);
             return &s_attitude;
         }
+    }
+    if (!filter || !filter->valid || !filter->initialized ||
+        filter->sample_count != sample->sample_count || filter->sample_tick_ms != sample->sample_tick_ms) {
+        BmiAttitude_Reset(BMI088_ATTITUDE_SOURCE_INVALID); s_seen = 0;
+        return &s_attitude;
+    }
+    for (i = 0; i < 3; i++) if (!BmiAttitude_Finite(filter->gyro_rad_s[i])) {
+        s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_BAD_INPUT);
+        return &s_attitude;
     }
     /* Six-face logs: native X=right, Y=forward, Z=up. Apply the SAME proper
      * rotation to accelerometer and gyro: body FRD = (native Y, X, -Z).
      * This does not modify calibrated raw arrays or ATOM's independent axes. */
     accel.axis.x = sample->accel_m_s2[1]; accel.axis.y = sample->accel_m_s2[0]; accel.axis.z = -sample->accel_m_s2[2];
-    gyro.axis.x = sample->gyro_rad_s[1]; gyro.axis.y = sample->gyro_rad_s[0]; gyro.axis.z = -sample->gyro_rad_s[2];
+    gyro.axis.x = filter->gyro_rad_s[1]; gyro.axis.y = filter->gyro_rad_s[0]; gyro.axis.z = -filter->gyro_rad_s[2];
     s_attitude.accel_norm_m_s2 = FusionVectorNorm(accel);
     if (!s_attitude.initialized) {
         if (s_attitude.accel_norm_m_s2 < 0.8f * BMI_ATTITUDE_GRAVITY ||
             s_attitude.accel_norm_m_s2 > 1.2f * BMI_ATTITUDE_GRAVITY ||
-            fabsf(gyro.axis.x) > BMI_ATTITUDE_ALIGN_RATE_RAD_S ||
-            fabsf(gyro.axis.y) > BMI_ATTITUDE_ALIGN_RATE_RAD_S ||
-            fabsf(gyro.axis.z) > BMI_ATTITUDE_ALIGN_RATE_RAD_S) {
+            fabsf(sample->gyro_rad_s[0]) > BMI_ATTITUDE_ALIGN_RATE_RAD_S ||
+            fabsf(sample->gyro_rad_s[1]) > BMI_ATTITUDE_ALIGN_RATE_RAD_S ||
+            fabsf(sample->gyro_rad_s[2]) > BMI_ATTITUDE_ALIGN_RATE_RAD_S) {
             s_align_samples = 0; s_align_sum = FUSION_VECTOR_ZERO;
             s_attitude.error = BMI088_ATTITUDE_ALIGNING;
             return &s_attitude;

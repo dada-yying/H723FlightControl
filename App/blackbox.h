@@ -4,8 +4,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#define BLACKBOX_TARGET_HZ 700U
-#define BLACKBOX_DATA_BUDGET 150000U
+#define BLACKBOX_TARGET_HZ 1000U
 
 typedef enum {
     BLACKBOX_DISABLED = 0, BLACKBOX_IDLE, BLACKBOX_SENDING,
@@ -31,11 +30,14 @@ typedef struct {
     HAL_StatusTypeDef last_timer_status;
 } BlackboxTxStats_t;
 extern volatile BlackboxTxStats_t g_blackbox_tx_stats;
-void Blackbox_Init(HAL_StatusTypeDef uart_init_status);
+/* Legacy Watch counter names retained: completed/submitted now mean enqueued,
+ * not durable SD writes. Use g_blackbox_stats for actual storage progress. */
+void Blackbox_Init(HAL_StatusTypeDef startup_status);
 HAL_StatusTypeDef Blackbox_StartRecording(TaskHandle_t task);
 void Blackbox_OnTaskCreationFailure(void);
 void Blackbox_NotifyFromISR(void); /* TIM4 only: next ARR + task notification. */
 void Blackbox_ProcessPending(void); /* Sole caller: independent BlackboxTask. */
-void Blackbox_Service(void);        /* Same task; recovery/schema on idle wakes. */
-void Blackbox_OnUartError(UART_HandleTypeDef *uart);
+void Blackbox_Service(void);        /* Same task; rate and timestamp maintenance. */
+uint16_t Blackbox_SchemaSize(void);
+const uint8_t *Blackbox_SchemaData(void);
 #endif

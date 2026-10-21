@@ -80,7 +80,7 @@ TIM7计数1MHz、ARR499，每500µs通知一次，IRQ优先级6；
 
 | 字段 | 偏移 | 类型 | 含义/单位 |
 |---|---:|---|---|
-| bmi088_gyro_rad_s | 112 | F32×3 | 校准、温补后未滤波XYZ，rad/s |
+| bmi088_gyro_deg_s | 112 | F32×3 | 校准、温补后未滤波XYZ，°/s（内部仍rad/s） |
 | bmi088_accel_m_s2 | 124 | F32×3 | 六面校准后未滤波XYZ，m/s² |
 | bmi088_temperature_c | 136 | F32 | 真实测量温度，°C |
 | bmi088_sample_count | 140 | U32 | 完整读取次数 |
@@ -93,13 +93,42 @@ TIM7计数1MHz、ARR499，每500µs通知一次，IRQ优先级6；
 | bmi088_calibration_version | 156 | U32 | 校准版本 |
 | bmi088_compensation_temperature_c | 160 | F32 | 限域模型温度，°C |
 | bmi088_compensation_in_range | 164 | U8 | 在模型数值域内 |
+| bmi088_gyro_filtered_deg_s | 184 | F32×3 | 三轴Butterworth低通后XYZ，°/s |
+| bmi088_gyro_filter_valid | 196 | U8 | 滤波结果有效 |
+| bmi088_gyro_filter_cutoff_hz | 197 | F32 | 实际截止频率，Hz |
+| bmi088_gyro_filter_sample_hz | 201 | F32 | 实际系数设计采样率，Hz |
 
 追加BMI姿态及状态的偏移165～183见 `BMI088_ATTITUDE.md`。
-当前载荷184字节、线缆包212字节；独立TIM4/BlackboxTask以700Hz节拍采集，DATA为148.4kB/s。
+当前黑匣子通过SPI-SD独立1kHz记录，详见BLACKBOX_V3.md；BMI088采集仍为2kHz。
 定义重发/DMA忙/调度延迟可跳过部分时隙，不补发；以 `g_blackbox_tx_stats.record_hz` 为准。
 ATOM停止后仍记录最新快照及已有状态/年龄；包头采集时间不表示传感器发生了新转换。
 新版不发送运动寄存器、未校准物理量或重复校准数组。
 F407固件和转换工具不用改/重烧，CSV按新自描述schema自动增减列；VOFA23通道不变。
+
+## BMI088三轴角速度低通
+
+完整SPI读取、单位转换及校准温补之后，`Bmi088GyroFilter_Compute()`在Bmi088Task中执行。
+直接Ⅰ型单精度biquad，三轴独立x1/x2/y1/y2，共用二阶Butterworth系数（Q=1/√2）。
+默认截止频率集中定义在 `App/bmi088_gyro_filter.h` 的 `BMI088_GYRO_FILTER_CUTOFF_HZ=50.0f`；
+对比40/50/60Hz需改该编译期常量并重新编译，不增加开关或Watch在线配置。
+初始系数按TIM7目标500µs/2kHz设计。只有新sample_count更新一次，原始数组不覆盖，
+首次有效样本直接作为输出并初始化历史。故障/20ms超时后结果失效，恢复由新样本初始化，
+旧缓存不能恢复valid。NaN/Inf、原始陀螺饱和和非法时间/参数不会进入后续历史。
+每128个成功有效样本的DWT间隔更新sample_hz，不使用日志频率或毫秒tick推算2kHz。
+连续3个窗口相对设计频率偏离超过2%、窗口互相接近（2%容差、同侧）才重算系数；
+普通抖动不逐样本重算，换系数保留历史。要求0<cutoff<0.45*sample_hz；低频不支持时
+标记无效，持续恢复确认后重新初始化，不绕过滤波提供有效角速度。ISR不滤波/不算系数。
+BMI姿态解算使用同次滤波角速度，仍按(nativeY,nativeX,-nativeZ)映射；原始输入的
+异常/饱和/启动运动检查保留。加速度、温控和校准均未改；当前飞控仍使用ATOM。
+
+Watch：原始值 `g_bmi088_data.gyro_rad_s[0..2]`，滤波值 `g_bmi088_gyro_filter.gyro_rad_s[0..2]`，
+两者均原生XYZ/rad/s。滤波结构中valid/initialized/error、sample_count/sample_tick_ms/age_ms，
+cutoff_hz/sample_hz/applied_sample_hz、coefficient_update_count/update_count/reset_count/rejected_count，
+以及max_compute_duration_us可观察状态、测得频率、实际参数和成功计算耗时（含偶发重算）。
+这些是观察字段，Watch写入不改变私有biquad状态或配置。单次
+`Bmi088_GetSnapshotWithFilter()`可读取原始、滤波、姿态的一致快照，旧读取接口保留。
+error=0等待，1正常，2源无效，3非有限输入，4陀螺饱和，5时间错误，6参数/频率不支持，7数值错误。
+低通引入相位延迟；不将离线曲线平滑度等同于姿态精度、ATOM闭环或飞行稳定性。
 
 ## 验证
 

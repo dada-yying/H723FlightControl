@@ -11,3 +11,6 @@ MDK-ARM/**/*.log
 MDK-ARM/**/*.lst
 MDK-ARM/**/*.map
 MDK-ARM/**/*.o
+
+# Host test binaries, RAM-card fixtures and converter output
+tests/build/

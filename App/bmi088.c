@@ -2,6 +2,7 @@
  * BMI088 SPI protocol. Acquisition/logging only; no flight-controller input. */
 #include "bmi088.h"
 #include "bmi088_attitude.h"
+#include "bmi088_gyro_filter.h"
 #include "bmi088_calibration.h"
 #include "spi.h"
 #include "main.h"
@@ -80,6 +81,7 @@ HAL_StatusTypeDef Bmi088_StartSampling(TaskHandle_t task)
         g_bmi088_data.valid = g_bmi088_data.initialized = 0;
         g_bmi088_data.error = BMI088_ERROR_TIMER;
         Bmi088Attitude_Invalidate();
+        Bmi088GyroFilter_Invalidate();
     }
     return status;
 }
@@ -98,7 +100,9 @@ void Bmi088_OnSamplingTimeout(void)
 {
     g_bmi088_stats.sampling_timeout_count++;
     Bmi088_GetData(NULL); /* Does not refresh time, perform SPI or fake a sample. */
-    if (!g_bmi088_data.valid) Bmi088Attitude_Invalidate();
+    if (!g_bmi088_data.valid) {
+        Bmi088Attitude_Invalidate();Bmi088GyroFilter_Invalidate();
+    }
     Bmi088_UpdateReadRate(HAL_GetTick());
 }
 
@@ -151,6 +155,7 @@ static void Bmi088_Fail(Bmi088Error_t error)
     taskEXIT_CRITICAL();
     g_bmi088_stats.stage = BMI088_RETRY_WAIT;
     Bmi088Attitude_Invalidate();
+    Bmi088GyroFilter_Invalidate();
     s_read_cycle_seen = 0;
     s_due_tick = HAL_GetTick() + BMI088_RETRY_MS;
 }
@@ -251,6 +256,7 @@ static void Bmi088_ReadSample(void)
     unsigned axis;
     Bmi088Data_t sample;
     const Bmi088AttitudeState_t *attitude;
+    const Bmi088GyroFilterState_t *filter;
     uint32_t completion_cycle;
     if (Bmi088_Read(1, 0x00, &id, 1) != HAL_OK) {
         Bmi088_Fail(BMI088_ERROR_SPI); return;
@@ -279,9 +285,11 @@ static void Bmi088_ReadSample(void)
     completion_cycle = DWT->CYCCNT;
     sample.has_sample = sample.valid = sample.initialized = 1;
     Bmi088_ApplyCalibration(&sample);
-    attitude = Bmi088Attitude_Compute(&sample, completion_cycle);
+    filter = Bmi088GyroFilter_Compute(&sample, completion_cycle);
+    attitude = Bmi088Attitude_Compute(&sample, filter, completion_cycle);
     taskENTER_CRITICAL();
     g_bmi088_data = sample; /* Publish only after ALL transfers/IDs succeed. */
+    g_bmi088_gyro_filter = *filter;
     g_bmi088_attitude_state = *attitude; /* Same sample, atomic publication. */
     taskEXIT_CRITICAL();
 }
@@ -291,6 +299,7 @@ void Bmi088_Init(HAL_StatusTypeDef spi_init_status)
     memset((void *)&g_bmi088_data, 0, sizeof(g_bmi088_data));
     memset((void *)&g_bmi088_stats, 0, sizeof(g_bmi088_stats));
     Bmi088Attitude_Init();
+    Bmi088GyroFilter_Init();
     g_bmi088_data.age_ms = UINT32_MAX;
     g_bmi088_stats.last_status = spi_init_status;
     s_config_index = s_config_verify = s_task_seen = 0;
@@ -315,6 +324,7 @@ void Bmi088_OnTaskCreationFailure(void)
     g_bmi088_data.initialized = g_bmi088_data.valid = 0;
     g_bmi088_data.error = BMI088_ERROR_TASK;
     Bmi088Attitude_Invalidate();
+    Bmi088GyroFilter_Invalidate();
 }
 
 void Bmi088_GetData(Bmi088Data_t *data)
@@ -324,6 +334,12 @@ void Bmi088_GetData(Bmi088Data_t *data)
 
 void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude)
 {
+    Bmi088_GetSnapshotWithFilter(data, NULL, attitude);
+}
+
+void Bmi088_GetSnapshotWithFilter(Bmi088Data_t *data, struct Bmi088GyroFilterState *filter,
+                                struct Bmi088AttitudeState *attitude)
+{
     uint32_t now;
     taskENTER_CRITICAL();
     /* Timestamp and sample are observed under the same lock. */
@@ -332,9 +348,16 @@ void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude
         (uint32_t)(now - g_bmi088_data.sample_tick_ms) : UINT32_MAX;
     g_bmi088_data.valid = (uint8_t)(g_bmi088_data.initialized &&
         g_bmi088_data.has_sample && g_bmi088_data.age_ms < BMI088_SAMPLE_TIMEOUT_MS);
+    g_bmi088_gyro_filter.age_ms = g_bmi088_gyro_filter.has_sample ?
+        (uint32_t)(now - g_bmi088_gyro_filter.sample_tick_ms) : UINT32_MAX;
+    if (!g_bmi088_data.valid || !g_bmi088_gyro_filter.initialized ||
+        g_bmi088_gyro_filter.sample_count != g_bmi088_data.sample_count ||
+        g_bmi088_gyro_filter.age_ms >= BMI088_SAMPLE_TIMEOUT_MS) {
+        g_bmi088_gyro_filter.valid = 0;
+    }
     g_bmi088_attitude_state.age_ms = g_bmi088_attitude_state.epoch ?
         (uint32_t)(now - g_bmi088_attitude_state.sample_tick_ms) : UINT32_MAX;
-    if (!g_bmi088_data.valid ||
+    if (!g_bmi088_data.valid || !g_bmi088_gyro_filter.valid ||
         g_bmi088_attitude_state.sample_count != g_bmi088_data.sample_count ||
         g_bmi088_attitude_state.age_ms >= BMI088_SAMPLE_TIMEOUT_MS) {
         g_bmi088_attitude_state.valid = 0;
@@ -343,6 +366,7 @@ void Bmi088_GetSnapshot(Bmi088Data_t *data, struct Bmi088AttitudeState *attitude
                 BMI088_ATTITUDE_TIME_GAP : BMI088_ATTITUDE_SOURCE_INVALID;
     }
     if (data) *data = g_bmi088_data;
+    if (filter) *filter = g_bmi088_gyro_filter;
     if (attitude) *attitude = g_bmi088_attitude_state;
     taskEXIT_CRITICAL();
 }

@@ -30,7 +30,9 @@ body_z = -native_z   // 下
 内部四元数wxyz采用FRD机体→相对NED参考系、ZYX欧拉顺序。
 标准NED欧拉Pitch是抬头正，输出时取负以符合当前显示约定。
 新记录的Roll右侧下沉正，Pitch机头下俯正，Yaw右偏航正。
-原 `bmi088_gyro_rad_s/accel_m_s2` 始终保持校准、温补后未滤波原生XYZ，不在发布层重排。
+内部 `g_bmi088_data.gyro_rad_s/accel_m_s2` 始终保持校准、温补后未滤波原生XYZ，不在发布层重排。
+现在AHRS使用同次采样的三轴50Hz二阶Butterworth低通角速度，姿态输入的原始异常、
+饱和与启动运动门控仍保留；加速度处理及上述轴向不变。滤波说明见 `BMI088_LOGGING.md`。
 不能照抄ATOM的角速度符号用于另一块IMU；实机方向仍需拆桨确认。
 
 状态角单位rad；黑匣子字段单位deg。Roll/Yaw一般在±180°，Pitch在±90°；
@@ -85,12 +87,13 @@ error：0等待源、1对准中、2正常、3源无效、4周期中断、5非法
 | bmi088_attitude_accel_used | 182 | U8 |
 | bmi088_attitude_error | 183 | U8 |
 
-载荷184字节，线路包212字节，独立TIM4/BlackboxTask目标700Hz，DATA为148.4kB/s。
-定义重发、DMA忙或任务延迟会跳过时隙，查看record_hz；不再依赖飞控更新或ATOM通知。
-串口仍UART7 2Mbps；DMA缓冲512字节不变。
-**F407生产固件与转换工具无需修改或重烧**，依新schema自动生成上述CSV列。
+滤波结果及参数追加到184～204后，载荷205字节、线路包233字节；独立TIM4/BlackboxTask
+当前黑匣子改为SPI-SD独立1kHz记录，已移除UART带宽限频，详见BLACKBOX_V3.md。
+定义重发不占用DATA时隙；任务延迟或队列满会丢采样并计数，查看record_hz和存储统计；不依赖ATOM通知。
+UART7黑匣子输出已移除；SPI-SD使用专用扇区DMA缓冲和独立存储任务。
+F407不再参与记录；原通用转换工具按schema自动生成上述CSV列。
 新数据与ATOM三轴姿态是不同传感器的估计，不是重复字段；VOFA23通道保持现状。
-原始/姿态采集2kHz不代表日志保存所有2kHz样本，ATOM断流时原有黑匣子DATA仍停止。
+原始/滤波/姿态采集目标2kHz不代表日志保存所有2kHz样本；ATOM断流时仍记录最新快照及状态/年龄。
 
 ## 验证
 

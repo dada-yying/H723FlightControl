@@ -1,76 +1,360 @@
-# SBB3 自描述黑匣子
+# SBB3 黑匣子：H723 SPI-SD 直接记录
 
-两块板必须同步烧录 V3。USART1 的 23 通道 VOFA（96 字节、230400、100 Hz）不变。
-UART7 改为 SBB3，不再能直接用 JustFloat 解码。F407 不解释任何飞控字段。
+当前 H723 不再从 UART7/PE8 发送黑匣子数据，F407 不参与记录。
+USART1 的 VOFA 仍为 23 通道、96 字节、230400、100 Hz。
+不修改 ATOM 飞控反馈、BMI088 采集/滤波/姿态、温控、遥控和电机保护。
 
-## 今后新增字段
+## 接线与通信
 
-仅修改 `App/blackbox_fields.h`：
+PE15=CS，PB3=SPI1_SCK，PB4=SPI1_MISO，PD7=SPI1_MOSI，SPI 引脚 AF5。
+保留 PA13/PA14 SWD；PB3/PB4 不再可用于 SWO/JTAG。
+模块供电由硬件负责，软件不控制其电源，不假定存在插卡检测脚。
+SD 启动使用 GPIO SPI mode 0，每个半周期至少 2 us（不超过250 kHz）。
+卡就绪后切到 SPI1 7.5 MHz，不改变 SPI2/BMI088 的共享 PLL 时钟。
+使用 DMA1 Stream1 TX、Stream3 RX，SPI1/DMA IRQ 优先级6；
+UART5 Stream0、USART10 Stream2 不变。
+初始化支持 SD v1/v2、SDSC/SDHC；检查命令 CRC7 和数据 CRC16。
+sector DMA 采用专用 32字节对齐 AXI SRAM bounce buffer及缓存维护。
+只在存储任务内等待 DMA/卡忙，超时后重试挂载；不在 ISR 或采样任务等待 SD。
 
-1. 在 `s_fields` 添加 `BF("name","unit",offset,count,type)`。
-2. 在 `Blackbox_Sample()` 填入对应小端字节。BMI088原始值/状态占112～164，独立姿态/状态占165～183，新字段从偏移184起，勿覆盖已有字段。
-3. 重新编译、烧录 H723。F407 固件和电脑转换工具均不用改。
+## 记录节拍与缓存
 
-字段名称为 ASCII 字母、数字、下划线，最多 63 字符，唯一；单位最多 31 个可打印 ASCII 字符。
-不要使用转换器元数据列名：session、file_number、block_number、sequence、receive_time_us、send_sequence、sample_time_us。
-支持 I8/U8/I16/U16/I32/U32/I64/U64/F32/F64/BYTES，固定数组用 count。
-最多 128 字段、484 字节数据载荷、8192 字节定义；超过限制禁用黑匣子，不影响飞控。
-光流字段是 raw27 区域的重叠视图，保留整数精度及原始协议字节。
-新增字段示例见 `BLACKBOX_TEST_EXTRA_FIELDS` 条件编译部分；生产编译不启用该宏。
+TIM4 1MHz计数、ARR999，独立1kHz通知 BlackboxTask（1024字节栈/Normal2）。
+每个新时隙只采集一次最新一致快照，通知合并时记录错过次数，不补算旧采样。
+锁定、ATOM断流仍记录状态及最后可用快照。BMI088读取目标2kHz，日志不是每个BMI样本。
+原233字节SBB3 DATA包不变；移除UART的150kB/s限频，新增字段不会自动降低记录频率。
+增加字段后需核对写卡吞吐与队列统计；单包上限仍为512字节。
 
-## 带宽和状态
+BlackboxStorage任务（4096字节栈/BelowNormal）独占FatFs/SPI。
+静态队列256KiB、批量缓存32KiB、工作块4KiB均显式放在AXI SRAM。
+当前DATA落盘记录252字节，每4096字节块最多16条，约256kB/s，另加定义和诊断。
+队列约容纳1040条当前大小的记录（另有定义），无法保证覆盖任意SD停顿。
+满时丢新记录，保留旧记录；原SBB3发送序号与块内丢弃计数用于诊断。
+启动挂载/预分配期间也会采样，超过队列容量的启动数据会被统计为丢弃。
 
-DATA 预算 150000 B/s，SCHEMA 预算 10000 B/s（含包头及 CRC）。
-独立 BlackboxTask（1024字节栈、Normal2）由 TIM4 通知，与飞控/IMU通知脱钩。
-TIM4 计数1MHz、IRQ优先级6，ARR预装载，1428/1429µs余数累加保持绝对700Hz节拍。
-当前载荷184字节、包长212字节，700Hz需要148400B/s；字段增加后有效节拍为
-min(700, floor(150000/包长)) Hz。任务延迟合并、DMA忙或定义发送时跳过，不补发旧数据。
-周期定义占用发送机会，实际完成频率可略低于700Hz，查看 `record_hz`。
-BMI088独立读取/姿态更新目标2kHz，黑匣子采集最近的成对一致快照，并非记录每个BMI样本。
-飞控端64位微秒时间戳仅保存在包头，转换后为 `sample_time_us`。
-删除载荷中的重复 `fc_timestamp_us`；时间本身没有丢失。
-从本次上电黑匣子首次维护调用开始计时，在采集遥测快照前读取；不是UTC、IMU测量时间或F407接收时间。
-定义启动先发完，再发数据；每2秒启动重发，周期分片至少间隔20ms。
-BMI088定义包含数组，CSV会自动展开如 `bmi088_gyro_deg_s[0]`（度每秒，原生XYZ轴）；
-新增 `bmi088_roll_deg/pitch_deg/yaw_deg` 及有效/epoch状态见 `BMI088_ATTITUDE.md`。
-BMI088原始值语义已统一为校准后、未滤波物理量；未校准运动寄存器及重复校准数组不再发送。
-同名旧日志字段为未校准值、新日志已校准，用schema/`bmi088_calibration_version`区分；
-保留温度测量、版本及温补域状态，参数依据见 `BMI088_CALIBRATION.md`。
-删除可由摄氏温度精确换算的 `bmi088_temperature_raw`，不再重复发送温度寄存器计数。
-测量温度与限域补偿温度在域外可以不同，二者并非重复字段。
-光流原帧与解码字段是同一字节区的视图，不额外复制载荷；定义周期重发与低频传感器
-快照在相邻采样中的重复值仍保留，分别用于晚启动恢复和完整时间序列。
-F407 和转换工具仍使用原 SBB3 版本，无需因新增 BMI088 字段修改或重新烧录。
-无 IMU 更新或电机锁定时仍记录最新可用快照及已有状态/年龄；快照时间不是新的IMU采样时间。
-DWT时间由独立黑匣子任务定期扩展，调试暂停不作为有效运行时间依据。
-任务创建或TIM4初始化/启动失败只禁用黑匣子，不影响飞控、BMI读取或加热。
+## 文件与异常
 
-Watch：`g_blackbox_tx_stats` 中 schema_id、payload_size、config_error、record_hz、
-bandwidth_skip_count、schema_submitted_count、schema_completed_count、data_completed_count，
-以及原有 busy_drop_count、error_count、timeout_count、abort_count。
-target_hz/effective_hz为目标/限频后节拍；timer_running/last_timer_status/timer_error_count
-观察TIM4；timer_irq_count、missed_trigger_count观察任务合并的错过时隙；stack_free_words为运行栈余量。
-bandwidth_skip_count仅统计字段增加后相对700Hz被带宽限制去掉的名义时隙；任务创建失败看task_error_count。
-record_hz 为最近统计窗口内已完成 DATA 数量，不是飞控频率。
+使用FAT32、SKYBBX3版本3：4096字节块、64字节块头、CRC32，
+每条记录含本地入队微秒时间、存储序号、包长度及原SBB3包。
+外层时间不再是F407接收时间；包头sample_time_us仍为H723采集快照时间，
+从本次启动黑匣子任务首次维护时开始，不是UTC。
+FAT目录日期沿用无RTC的固定日期，不可用于判断飞行时间。
 
-## 转换
+每次上电创建新的Bnnnnnnn.BIN，正常运行只用该文件。
+先写入完整SCHEMA，再写DATA；定义由存储任务在每个新文件写一次，不在DATA间重复插入。
+定义前缀记录没有传感器采样时间，其时间/发送序号为0。
+全部既有数据字段、单位及载荷偏移保持不变。
 
-在 F407 工程目录执行：
+保留40MiB分步预分配目标，首个4MiB已提交后即开始记录，其余在队列允许时后台完成。
+保持4MiB增长余量、32KiB批量，
+不足一批最长250ms提交，每1s同步；预分配尾部可能含旧卡内容，
+转换器根据文件/session/块号/CRC过滤，不以文件大小代表有效记录量。
+短暂故障恢复同一卡上的原文件并验证最后已写块，避免重复提交完整批次。
+普通I/O超时不会直接认定文件损坏；成功读取并反复确认无法安全续写时新建文件，
+重新保存完整定义并保留待写数据。
+卡满或达到FAT32单文件上限时本次上电停止记录；不覆盖旧文件、不自动格式化。
+无法使用卡时记录故障、定时重试，不改变飞控保护。
+直接断电可能丢失尚未落盘的数据；同步周期不是掉电损失的硬保证。
 
+## 字段和Watch
+
+新增字段仍只需在App/blackbox_fields.h注册字段并填入字节，不修改通用转换工具。
+字段支持固定数组/整数/float/字节，定义上限8192字节、128字段。
+保留已有205字节载荷布局：BMI088未滤波deg/s在112，姿态/状态在165，
+滤波deg/s/valid/参数在184～204；未来字段从205开始。
+两个BMI角速度数组在内部均为rad/s，仅序列化转换为deg/s，均为原生XYZ。
+光流原帧和解码字段仍共享同一字节区，不复制载荷。
+
+- g_blackbox_tx_stats：target_hz/effective_hz=1000、record_hz为入队DATA频率，
+  missed_trigger_count为错过采样时隙；busy_drop_count为队列拒绝。
+  保留旧名称以便Watch迁移，submitted/completed仅表示入队，不表示已写卡；
+  原UART错误/中止字段不再使用，bandwidth_skip_count保持0。
+- g_blackbox_stats：write_hz为实际写入DATA频率，data_written、written_blocks、
+  queue_used/queue_high_water、dropped_frames、max_write_ms/max_dma_ms/max_card_busy_ms、
+  last_error/last_sd_error、retry_count/recovery_count、file_number/switch_reason、stopped。
+  stack_free_words和heap_free_bytes观察存储任务资源；采样任务栈看g_blackbox_tx_stats。
+- 字节/块统计、记录计数可能包含SCHEMA，勿直接当作采样数。
+- 队列入队失败、写卡失败和飞控时隙遗漏分别计数，不能仅看“完成”判断日志完整。
+
+## 转换与验证
+
+### 无仪器初始化诊断（2026-10-20）
+
+`g_sd_spi_diag.version=0x20261020`，记录初始化尝试/成功/失败次数、当前与失败阶段、
+失败命令/R1/命令是否发出。阶段：1启动时钟、2 CMD0、3 CMD8、4 ACMD41、5 OCR、
+6块长度、7CRC启用、8CSD、9CID、10硬件SPI初始化、11就绪。
+用户对CMD0跳过前置ready等待的修改保留；本次不再改变初始化命令和时序策略。
+
+`g_sd_spi_diag.cmd0`冻结第一次完整CMD0：
+
+- complete=1后再查看；调试器Watch将其设为0可在下一次初始化重试时重新捕获。
+- tx[6]是命令缓冲，mosi_readback[6]是在各发送位低电平建立期读取的PD7输入路径。
+  正常二者均为40 00 00 00 00 95。gpio_checked=1才表示执行过真实GPIO读回检查。
+- rx[0..rx_count-1]为当前接收方式的逐字节结果；rx_low_phase为同一时钟周期低电平
+  建立期的对照采样。对照值不用于协议判断，不自动切换相位。
+- cs_not_low_count、sck_not_low_count、sck_not_high_count、mosi_mismatch_count
+  正常均0；这些是MCU引脚输入路径的读回检查，不代表模块端波形测量。
+- duration_us是CMD0发送六字节及响应轮询的总时间；bit_period_min_cycles/max_cycles
+  为相邻位的观测间隔。除以SystemCoreClock/1e6可换算微秒，任务抢占也包含在内。
+  诊断代码会增加少量GPIO读取开销，不代表无诊断版本的精确时序。
+
+上电运行期间不要在SPI逐位收发中打断点；运行约10秒后暂停，展开cmd0和失败阶段查看。
+冻结记录避免后续重试覆盖首现场，也避免依赖优化后不可见的局部变量。
+`tests/test_sd_bitbang.c`执行生产spi_byte位循环，用GPIO寄存器/模式0卡模型检查
+所有字节、读回、观测相位、冻结/重新捕获、无响应及计数器回绕；不能代替实机结果。
+
+初始化成功后仍报同步/写入超时的版本使用 `g_sd_spi_diag.revision=2`。
+`io_fault`在第一次读、写或CTRL_SYNC错误时冻结，后续复位重试不会覆盖；
+Watch设其complete=0可重新捕获。operation=1读、2写、3CTRL_SYNC；
+kind=1 HAL单字节失败、2卡忙超时、3 DMA启动失败、4 DMA完成等待超时、
+5 DMA错误回调、6读数据起始字节错误/超时、7写数据响应拒绝、8数据CRC错误、9命令响应错误。
+同时保留HAL返回值/ErrorCode/State、SPI寄存器、DMA剩余计数、扇区、命令及耗时。
+HAL返回值0成功、1错误、2忙、3超时；卡忙与HAL失败不能仅凭0x80000001区分。
+read_sectors/written_sectors/sync_calls/sync_successes为累计通信计数，
+g_blackbox_stats.data_written才是已提交日志块中的DATA记录数量。
+
+本地HAL的SPI_CloseTransfer在关闭SPI1前加入有限NOP等待（至少1us，当前SCK=7.5MHz），
+覆盖ST ES0491 2.21.5对EOT后输出截短的规避要求；DMA和轮询均经过此路径。
+SPI2/BMI088、SPI6不执行此等待，不改共享PLL、SPI频率、SD忙等待期限或飞控算法。
+该规避是针对已发现的软件缺口，不代表已证实它是所有同步超时的唯一原因。
+依据：https://www.st.com/resource/en/errata_sheet/es0491-stm32h72xx73xx-device-errata-stmicroelectronics.pdf
+tests/test_sd_eot.c检查SPI1限定及不依赖DWT的等待；首次I/O错误冻结、HAL失败与卡忙区分、
+DMA启动/等待/回调及CRC错误诊断纳入run_sd.ps1。仍需实机验证。
+
+revision=3针对实际出现的HAL单字节轮询超时（7ms/timeout=5ms）补充SPI1限定修正：
+原HAL即使当前字节TX/RX计数已全部完成，仍在轮询末尾无条件判定累计时间超时。
+真实函数主机复现中，在最终RX读取前模拟7ms任务抢占，旧逻辑返回HAL_TIMEOUT，
+修正后SPI1进入正常EOT检查；仍未完成的TX/RX和EOT故障继续报错。
+不增加原5ms期限，不重发可能已经发送成功的字节，不修改SPI2/6的轮询行为。
+`g_spi1_completed_after_deadline_count`统计已完成后避免的超时误判次数。
+该计数大于0证明实机触发过此分支，也表明存储任务存在调度延迟；记录频率与丢帧仍需检查。
+`tests/run_sd_poll.ps1`每次从生产HAL源文件提取真实函数到tests/build再编译，
+覆盖正常收发、7ms抢占、真实TX/RX/EOT超时及SPI2/6不变，避免维护一份伪造HAL实现。
+这能证明软件缺陷及修正分支，不单独证明所有实机写卡故障已经消除。
+
+revision=4：实机确认上一修正分支触发后，仍在CMD17后的单字节轮询出现超时，
+因此SD硬件SPI阶段的所有字节统一走SPI DMA路径：
+命令/响应/令牌/CRC每次1字节，扇区数据每次512字节；不再调用单字节
+HAL_SPI_TransmitReceive轮询。慢速GPIO初始化保持原样，SPI1频率不变。
+单字节也使用独占AXI bounce buffer；缓存维护范围向上取整至32字节，扇区为512字节。
+沿用现有DMA完成回调、100ms等待阈值和故障中止；已完成后任务延迟9ms仍视为完成，
+无完成事件/错误回调/启动失败仍记录错误。卡忙500ms期限不变。
+byte_dma_count/sector_dma_count观察已完成的1字节/512字节DMA，last_transfer_size观察最近长度；
+io_fault.transfer_size在DMA故障时直接区分1或512。非DMA故障时该字段只是最近一次DMA长度。
+原g_spi1_completed_after_deadline_count保留为HAL兼容计数，但SD新路径不再触发它，
+不再以此计数是否增长判断SD恢复。应看data_written/write_hz及io_fault.complete。
+模拟协议测试现在也通过真实spi_byte的1字节DMA分支，覆盖命令→响应→512字节→CRC的交替，
+不再在硬件SPI阶段用字节替身跳过此分支。新增IRQ及调度开销、实机1kHz落盘频率仍需测量。
+
+revision=5针对实际日志断续和队列溢出：
+
+- 实测旧B0000003.BIN含8151条DATA，时间跨度121.008835s；551个有效块无CRC坏块，
+  最终块统计丢弃131382个记录包。队列高水位262144字节，长期接近满载；
+  最大32KiB写入2.55s。启动队列首段约1s后有24.909627s空洞。
+  这说明能写文件不等于能持续保存1kHz，不应靠绘图插值掩盖。
+- 1字节DMA启动后最多短等20us（DWT工作时），不关中断，高优先级任务仍可抢占；
+  通常IRQ很快完成，避免每字节阻塞/唤醒低优先级存储任务。
+  如未完成则退回原100ms通知等待。512字节DMA仍通知等待。
+  DWT停止时也有有限迭代上限，避免死等；该备用路径不保证精确20us。
+  byte_short_complete_count统计短等待内可见完成（含启动已完成），
+  byte_notify_wait_count统计需要通知等待的字节；byte_short_wait_max_cycles含任务抢占时间，
+  不能当纯CPU占用。实机应看write_hz、record_hz及RECORDING后dropped_frames是否继续增长。
+- 首个4MiB已提交即可开始数据写入；继续后台预分配至40MiB。
+  prealloc_ms现在表示本文件创建至首段可记录时间，不是全部40MiB完成时间。
+  上电采样仍开启，初始化未就绪时超出RAM容量的数据仍会丢弃并计数，不能恢复旧丢失数据。
+- 每文件前缀保留完整定义，采样任务不再周期追加SCHEMA。
+  避免CSV只含DATA、序号却夹有定义记录时产生额外绘图断线。
+  schema_*发送统计为历史兼容字段，不表示当前文件是否有前缀定义。
+- 外层序号保留队列丢弃产生的缺口，不再把全部已保存记录强制重新排成连续序号。
+  损坏换文件时插入新定义仍保留待写记录内的原有缺口；SBB3载荷字段和转换器不变。
+- 新主机测试验证延迟DMA IRQ可在短等待完成且不阻塞通知、超时仍可退回等待，
+  验证4MiB时启动记录且40MiB目标尚未完成、真实队列丢弃后序号跳跃及文件恢复。
+  不把主机测试视为实机1kHz吞吐保证。
+
+构建一致性：原命令行脚本固定-O3，而当前Keil目标Optim=1对应-O0。
+脚本新增-Optimization 0/1/2/3参数（默认仍3），不修改工程优化配置。
+本次同时生成sd-spi-throughput-verified（O3）和sd-spi-throughput-keil-verified（O0），
+两种设置均编译链接、DMA地址及静态栈/堆检查通过。调试时应使用与固件配套的AXF符号。
+示例：MDK-ARM/build_ws2812.ps1 -OutputDirectory sd-spi-throughput-keil-verified -Optimization 0。
+
+## Revision 6：短事务轮询与整扇区 DMA（2026-10-21）
+
+以下为当前实现，替代上文 revision 4/5 的单字节 DMA 路径。
+参考 Betaflight 的短事务/块传输分离与 SD 多块写设计，按本工程接口独立实现：
+- https://github.com/betaflight/betaflight/blob/master/src/platform/STM32/bus_spi_ll.c
+- https://github.com/betaflight/betaflight/blob/master/src/main/drivers/sdcard_spi.c
+
+文件层继续沿用本地 F407 工程的 FatFs、32 KiB 批量写入、预分配和原文件恢复。
+接口、引脚、7.5 MHz、1 kHz 采样、队列、文件格式和任务优先级不变。
+
+- 快速短事务直接访问 SPI1 寄存器：命令 6 字节一次传输，响应/令牌逐字节处理；
+  无单字节 DMA、缓存维护或通知等待。中断始终开启，检查 TXP/RXP/EOT 和硬件错误。
+  每次最多一个未读取字节，避免抢占期间 RX FIFO 溢出。
+  完成检查先于 5 ms 超时检查；DWT、HAL tick 和有限迭代共同防止死等。
+  FIFO/EOT 故障仍会失败，先冻结诊断再终止外设。关闭 SPI1 前仍执行现有 EOT 保护。
+- 每次扇区写 DMA 为 516 字节：FF + FE/FC 令牌 + 512 字节数据 + CRC16。
+  最多读取 16 字节等待数据响应，再等卡结束忙状态；停止令牌后保留 N_BR 空闲时钟。
+  读数据令牌之后一次 DMA 读取 514 字节：512 字节数据 + CRC16；通过 CRC 后才复制数据。
+  CMD25 写流内不逐扇区切换 CS；CMD18/CMD12 读流及 FD 写停止令牌保持协议边界。
+- CMD25 前发送 CMD55/ACMD23，提示本批扇区数。
+  R1=04（仅 illegal command）允许继续；超时、空闲态、CRC 等其他错误均进入原恢复流程。
+- TX/RX 各 544 字节，32 字节对齐、AXI SRAM，缓存维护长度向上对齐到缓存行。
+  DMA 100 ms、卡忙 500 ms、读令牌 200 ms 的超时保持；卡忙/等令牌每轮 32 字节后让出一个 tick。
+  DMA EOT 回调只表示传输完成，disk_write 成功仍要求卡就绪。
+- 短事务与 DMA 有独占状态；错误/复位先撤销回调接收，再 abort 并清理 pending IRQ。
+  空闲或短事务期间的迟到回调被忽略并计数。
+
+Watch：`g_sd_spi_diag.revision == 6`。
+
+| 字段 | 说明 |
+|---|---|
+| `short_transfer_count` / `short_bytes` | 成功短事务数及字节数 |
+| `short_timeout_count` / `short_error_count` | 短事务超时、硬件/占用错误 |
+| `block_dma_count` / `dma_bytes` | 成功整扇区 DMA 数及线路字节数，读 514 / 写 516 |
+| `preerase_count` / `preerase_accepted` | 预擦除尝试及接受次数 |
+| `preerase_unsupported` / `preerase_errors` / `preerase_last_r1` | 不支持、错误及最近 R1 |
+| `dma_to_irq_max_cycles` | DMA 启动至 SPI EOT 完成回调的最大 CPU 周期数 |
+| `dma_resume_max_cycles` | 完成回调至存储任务恢复处理的最大 CPU 周期数 |
+| `ignored_callback_count` | 未处于有效 DMA 等待状态的回调数 |
+
+两项周期统计除以 `SystemCoreClock/1000000` 得到微秒。
+启动至回调包含中断延迟，恢复时间包含调度延迟，均不是纯 SPI 线路耗时。
+旧 `byte_dma_count`、`byte_short_*` 和 `byte_notify_wait_count` 保留，不在新正常路径增长；
+旧 `sector_dma_count` 继续表示成功扇区 DMA 次数，与 `block_dma_count` 同步。
+这些字段只追加到 Watch 结构，未加入 BIN 诊断块或修改 SBB3 schema。
+
+验证入口：`tests/run_sd.ps1`（包含真实寄存器轮询模型、逐字节协议模型及原文件恢复）；
+用 PowerShell 7 执行，避免 Windows PowerShell 5.1 将无 BOM UTF-8 的中文路径误解码。
+构建分别使用 `-OutputDirectory sd-spi-rev6-o0 -Optimization 0` 和
+`-OutputDirectory sd-spi-rev6-o3 -Optimization 3`，再运行 `tests/verify_optical_build.py`。
+主机测试不测卡吞吐：实机需拆桨运行至少 60 秒，分开统计启动丢帧和 RECORDING 后丢帧，
+核对采样/写入频率、队列占用、序号/时间戳，以及飞控/BMI088 节拍和实际栈余量。
+正常数据块约 256 kB/s；32 KiB 批次对应 128 ms 新数据，256 KiB 队列约缓冲 1 秒。
+持续吞吐须覆盖数据生成速度并有余量，新增调度耗时统计用于定位仍存在的瓶颈。
+本次不烧录硬件，构建和主机测试不代表完成实机持续写入或实飞验证。
+
+本次软件验证结果：SD 主机回归通过；基础/扩展 schema 各 2000 条 DATA 经原转换器解析，
+CRC 错误、未解码记录和记录缺口均为 0。O0/O3 均完成 64 源文件编译链接且无编译警告。
+两种构建的 TX/RX 分别位于 0x24049380/0x240495A0，各 544 字节；
+存储任务静态栈深分别为 1768/1840 字节（配置 4096），应用任务分配预算 11648/15360 字节。
+控制、光流、BMI088 采集/低通和姿态测试通过；完整控制回归在既有温控测试第 39 行停止：
+测试仍期望 pwm_ccr=100，与当前生产温控参数不符，本次未更改温控代码或参数。
+
+## Revision 7：命令中途抢占的超时修正（2026-10-21）
+
+已通过新增寄存器模型复现 revision 6 的缺陷：6 字节命令第一个字节完成后，
+任务被抢占 9 ms；恢复读取该字节并启动下一字节时，旧事务起点已超过 5 ms，
+下一字节尚在正常传输就被误判超时。原测试仅模拟最后一个字节完成后的抢占，未覆盖此情况。
+
+短事务现在按硬件进展刷新等待预算：发送一个字节或消费一个已完成 RX 后，
+为下一阶段重新开始 5 ms 停滞检测；总字节数限制为 16，等待仍有 tick、DWT 和有限循环兜底。
+已完成 RX/EOT 优先检查；真正卡住的 TXP/RXP/EOT 仍然失败。
+这修复了可复现的软件缺陷，但不能在缺少实机故障快照时断言其是本次停写的唯一原因。
+
+Watch revision 为 7，新增 `short_progress_recoveries` 统计延迟超过 5 ms 后仍成功消费 RX 的次数；
+`short_fault_sent`、`short_fault_received`、`short_fault_wait_ms` 随首个短事务故障冻结，
+用于判断出错时已发送/已接收字节数和本阶段等待时间。原 io_fault 和错误枚举含义不变。
+
+本轮只读检查 G:/B0000001.BIN、B0000002.BIN：文件均为 4,227,072 字节，
+分别含 96、864 条有效 DATA（采样跨度约 95 ms、863 ms），已识别有效块无 CRC 错误。
+其余块为其他 session 的预分配旧内容，由转换器排除；文件大小不等于有效数据量。
+4 MiB 是首段预分配门槛，不能据此诊断为容量限制或 SD 卡完全无法通信。
+
+构建目录为 `MDK-ARM/sd-spi-rev7-o0` 和 `MDK-ARM/sd-spi-rev7-o3`，
+HEX 必须搭配同目录 AXF。未烧录硬件；需要实机核对首个故障、写入计数及队列变化。
+
+## Revision 8：超时判定前重新检查实际硬件状态（2026-10-21）
+
+实机 revision 7 首个故障：读 sector=0、CMD17/R1=00、transfer_size=1，
+elapsed_ms=10，kind=SHORT_TIMEOUT，但冻结的 SPI_SR=0x301F。
+其中 RXP/EOT/TXC 已置位、RXPLVL=1，表示字节已经完成且 RX FIFO 有数据；
+没有 OVR/UDR/MODF/TIFRE 错误位。这与单纯 SD 卡未回应、写卡数据 DMA 超时不同。
+
+已在生产轮询循环外模拟中断时序并复现同一故障：检查 RXP 时字节尚未完成，
+随后在 HAL_GetTick 前抢占 10 ms，期间硬件完成传输。revision 7 用旧状态直接判超时，
+捕获时却已经是 0x301F。修复前测试确实触发此失败；revision 8 在发现等待过期后重新读 SR，
+先处理硬件错误，若 RX/TX/EOT 有可推进的进展则继续完成，不由过时状态中止。
+保持 5 ms 停滞预算、有限循环、IRQ 开启和 revision 7 的逐进展计时。
+
+同时补齐 DSIZE=8 的 RX FIFO 尾部判断：RXP、RXWNE 或 RXPLVL 表示实际存在数据时才读 RXDR。
+仅有 EOT 而 FIFO 为空依旧超时，不能据此伪造一个接收字节。
+此次截图中 RXP 本身已置位，直接复现的是前述状态/时间检查竞争；FIFO 尾部处理是相关边界补齐。
+
+Watch 新增 `short_deadline_rechecks`：过期后重新检查 SR 发现仍可推进的次数；
+`short_fifo_tail_reads`：RXP 未置位、根据 FIFO 占用读取尾部的次数；
+`short_fault_status`：首个短事务故障在决策时的 SR，配合原 sent/received/wait_ms 和 io_fault。
+这些为累计诊断计数，并非丢包数；正常记录时可能为 0，也可能递增。
+固件自报 revision=8；正常采样/协议/卡频率/任务和控制参数均未调整。
+
+构建目录：`MDK-ARM/sd-spi-rev8-o0`、`MDK-ARM/sd-spi-rev8-o3`。
+HEX 和 AXF 使用同一目录。实机需拆桨复位连续运行后确认 data_written 与 write_offset 增长，
+state 进入 RECORDING；同时检查 queue_used、dropped_frames 和 io_fault.complete。
+若再次失败，保留 io_fault 和 short_fault_* 首个故障，不用历史 last_error 单独判定当前状态。
+这次修复已复现的主机故障，不代替实机持续 1 kHz 写卡验证，未烧录硬件。
+
+本轮验证：新增测试先在 revision 7 复现单字节 SR=0x301F、10 ms 的误超时，
+修复后通过；同时覆盖命令 6 个字节位置、时间回绕、EOT 判定窗口、RXP 未置位的 FIFO 尾部、
+EOT 置位但 FIFO 为空，以及超时重查时出现硬件错误。
+SD 全套主机回归通过；基础/扩展 schema 各 2000 条 DATA 经原转换器解析，
+无坏块、未解码数据或序号缺口。O0/O3 均完成 64 源文件编译链接，无编译警告。
+AXI DMA 缓冲地址和对齐检查通过，存储任务静态栈分别 1776/1840 字节，配置仍为 4096 字节。
+
+## Revision 9：存储调度与 CRC 开销（2026-10-21）
+
+用户提供的 revision 8 Watch 为 RECORDING、io_fault.complete=0，queue_used=0x3FFC0，
+data_written=1488。只读解析 G:/B0000004.BIN：当前 session 有 1488 条 DATA、18 条 SCHEMA，
+无有效块 CRC 错误；末块累计 dropped_packets=16577。首末采集时间约 0 至 7.804 s，
+记录间隔中位数 1000 us，但实际保存的数据有大量缺口；排队中的旧采样时间不能代替当前写入吞吐。
+uptime=15.513 s 的诊断块中，队列为 262080 字节，32 KiB 写入最长 1020 ms，
+allocated_bytes=4227072。队列持续满载时后台预分配让位数据，约 4 MiB 的文件大小并非容量上限。
+
+用户补充的 dma_to_irq_max_cycles=0x004C3458、dma_resume_max_cycles=0x0121542C，
+按 480 MHz 分别约 10.40445 ms、39.503025 ms。
+前者包含外设传输及 IRQ 延迟，后者是 EOT 回调之后直到存储任务获调度的延迟。
+这些最大值不是每扇区平均耗时，但可确认此前 BelowNormal 存储任务存在长时间无法恢复的情况。
+
+经用户明确允许：存储任务从 BelowNormal 改为 Normal，并同步 .ioc；
+与默认 VOFA 和光流任务同级，依靠原有 1 ms RTOS 时间片，继续低于 BMI088 Normal1、
+黑匣子采样 Normal2、遥控和飞控。任务栈/堆、SPI 参数及 VOFA 发送实现不变。
+
+H723 的 SBB3 组包、验包和 4 KiB 块 CRC32 改用不可变查表；SD 数据 CRC16 同样查表。
+新 `App/storage/blackbox_crc.h` 使用相同 CRC32/ISO-HDLC 和 CRC16/XMODEM 参数，
+不减免 CRC 校验、不占用硬件 CRC、不需要临界区或运行时建表。
+`App/blackbox_protocol.h` 选择共享 sbb3.h 中新增的可选 CRC 实现入口；
+未选择入口的 F407 继续使用原逐位算法。协议字段、schema ID、CRC 结果和转换工具保持一致。
+
+Watch revision=9，增加成功 DMA 的 `dma_latency_samples`、`dma_irq_total_us`、
+`dma_resume_total_us`。取两个时刻的总微秒差除以样本数差，可分别得到该窗口平均 IRQ 完成延迟和
+任务恢复延迟；只读诊断的 64 位累计量在实时刷新时可能非原子，精确比较应暂停后读取。
+原有最大周期数继续保留，用于观察最坏情况。
+
+验证包括原逐位参考与新算法的标准向量、全部单字节、0/FF/递增/随机模式、
+32 个非对齐偏移、短长度和 4 KiB 块，及完整组帧→FatFs→原转换器兼容回归。
+主机 8 MB CRC32 对比约为查表 0.016 s、逐位 0.141 s，这不是 MCU 耗时或实际 SD 吞吐。
+构建目录 `MDK-ARM/sd-spi-rev9-o0`、`MDK-ARM/sd-spi-rev9-o3`，均 64 源文件编译链接通过。
+CRC 表位于 Flash，TX/RX 仍各 544 字节、AXI SRAM 对齐；静态任务栈检查和堆预算通过。
+H723 SD 回归及基础/扩展 schema 各 2000 条 DATA 的原转换器往返检查通过。
+将本次 H723 生成的线包作为跨工程输入，F407 原 tests/run.cmd 全部通过，
+包括流解析、缓存/恢复/批量写入、SDIO DMA 和 20 项转换器测试；F407 源码未修改。
+
+实机需拆桨运行至少 60 秒，分别核对启动阶段与进入 RECORDING 后的 dropped_frames，
+确认队列不持续满载、data_written 的每秒增量接近 1000，以及 BIN 时间戳/序号的完整性；
+并核对 BMI088/飞控实际节拍、VOFA 错误数和各任务栈余量。
+该修改针对已确认的调度延迟和计算开销，不宣称已在实机消除全部丢帧；未烧录硬件。
+
+继续使用STM32F407VET6黑匣子/tools/blackbox_to_csv.py：
 ```powershell
 python tools/blackbox_to_csv.py 'E:/B*.BIN' -o flight.csv --report flight.report.json
 ```
+不同schema输出各自CSV和schema JSON，保留原BIN；转换器无需改动。
+H723主机测试：tests/run_sd.ps1。覆盖实际组帧→实际队列/FatFs/恢复→原转换器，
+同时验证字段扩展、SPI协议CRC、DMA忙/错误/超时、卡忙和恢复。
+tests/pid_tuning/run.ps1回归控制/传感器；温控旧参数断言问题单独报告，不改生产参数。
+ARMCC构建：MDK-ARM/build_ws2812.ps1 -OutputDirectory blackbox-spi-sd-verified；
+静态资源检查：tests/verify_optical_build.py MDK-ARM/blackbox-spi-sd-verified。
 
-V3 输出 `flight.<schema_id>.csv` 和 `flight.schema.json`，不同定义分开文件。
-工具两遍扫描，可用后出现的定义解码前面的数据；缺定义会报告 undecoded_records。
-V2 仍可单独只读转换；不可把 V2/V3 混在一次输入中。
-原 BIN 应保留。CRC 不等于接收确认，发送完成不证明 SD 卡保存成功。
-
-板载 BMI088 字段、采样配置与 Watch 说明见 `BMI088_LOGGING.md`。
-
-## 验证边界
-
-主机测试覆盖两种 H723 字段注册表 → 同一 F407 实际 FatFs 存储程序 → 同一转换器。
-运行 F407 `tests/run_cross.ps1`。ARMCC 构建及静态 SRAM/栈检查不替代实机。
-首次拆桨，同时升级两块板，持续记录至少60秒，检查 UART/SD 错误、队列字节占用、
-丢包、记录频率和晚启动定义恢复。飞行稳定性未由本次测试证明。
+.ioc记录硬件资源，低速GPIO初始化→硬件SPI切换及FatFs接入为手工模块，
+CubeMX再生成后须检查这些用户逻辑及链接段，不能用自动SPI初始化替代启动流程。
+尚需实机拆桨连续记录至少60秒，检查采样/写入接近1kHz、
+队列与错误计数、SD文件转换、断电恢复、飞控频率、BMI2kHz及任务栈余量。
+编译和主机模拟不证明实际卡吞吐、线缆信号质量、掉电可靠性或飞行稳定性。
