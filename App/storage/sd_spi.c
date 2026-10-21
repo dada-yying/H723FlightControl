@@ -464,7 +464,7 @@ DSTATUS disk_initialize(BYTE drive)
     uint32_t start=HAL_GetTick(),arg;uint8_t r,ocr[4],csd[16];unsigned i;
     if(drive)return STA_NOINIT;
     g_sd_spi_diag.version=0x20261020U;g_sd_spi_diag.init_attempts++;
-    g_sd_spi_diag.revision=9;
+    g_sd_spi_diag.revision=10; /* Bundle includes BMI088 SPI2 tick-boundary fix. */
     g_sd_spi_diag.stage=SD_INIT_CLOCKS;
     BB_DiskReset();vTaskDelay(pdMS_TO_TICKS(10));
     for(i=0;i<10;i++)spi_byte(0xff);

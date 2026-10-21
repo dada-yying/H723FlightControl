@@ -110,7 +110,7 @@ int main(void)
     SCB->CCR=SCB_CCR_DC_Msk;
     assert(crc7((uint8_t[]){0x40,0,0,0,0},5)==0x95);
     reinit();assert(high_capacity && fast && sectors==8388608);
-    assert(g_sd_spi_diag.revision==9 && g_sd_spi_diag.stage==SD_INIT_READY);
+    assert(g_sd_spi_diag.revision==10 && g_sd_spi_diag.stage==SD_INIT_READY);
     assert(g_sd_spi_diag.cmd0.complete && g_sd_spi_diag.cmd0.r1==1);
     assert(disk_ioctl(0,GET_SECTOR_COUNT,&value)==RES_OK && value==8388608);
     read_pattern=37;assert(disk_read(0,b,100,1)==RES_OK);

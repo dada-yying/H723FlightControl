@@ -342,6 +342,47 @@ H723 SD 回归及基础/扩展 schema 各 2000 条 DATA 的原转换器往返检
 并核对 BMI088/飞控实际节拍、VOFA 错误数和各任务栈余量。
 该修改针对已确认的调度延迟和计算开销，不宣称已在实机消除全部丢帧；未烧录硬件。
 
+## Revision 10：BMI088 插卡负载下的 SPI2 误超时（2026-10-21）
+
+用户实机在 Bmi088_Fail 入口确认 last_status=HAL_TIMEOUT(3)、last_spi_error=0x100，
+并反馈不插卡时不触发、插卡记录时触发。日志已记录 21 段 SPI 错误重启，每段约 1.184 s。
+这确认了实际错误类型和负载相关性，尚不能单凭这两个值断言每次超时均已完成全部字节。
+
+从生产 HAL 提取实际函数的诊断测试已复现：SPI2 完整收到 1..8 字节，恰逢 1 ms tick 翻转，
+仍返回 HAL_TIMEOUT/0x100。原 SPI1 补丁未覆盖 SPI2；BMI088 把每次 HAL 错误按真实错误恢复，
+等待 1000 ms，再进行两次 80 ms 复位等待和寄存器配置，形成约 1.184 s 的中断。
+
+本次只修正 SPI2、8 位主机、既有 timeout=1ms 的 HAL TxRx 轮询路径：
+- DWT 测量实际 1ms 等待，避免把跨 tick 的数微秒误当成等待 1ms。
+- DWT 不可用/停止时，由超过一个 tick 的兜底和有限迭代防止死等；此降级路径不保证精确 1ms。
+- 到期后重读接收 FIFO；只消费已发送字节对应的实际 RX 数据，所有字节齐全后继续 EOT/硬件错误检查。
+- EOT 等待也采用同一预算，到期后重查完成标志。TX/RX/EOT 真正停滞及硬件错误仍失败。
+- 保留传感器真实错误后的原恢复流程、2kHz 调度、滤波、校准、温控和 ATOM 闭环。
+SPI1 的 revision 9 传输实现和 Normal 存储任务未调整；SPI6 及其他 HAL 模式未改。
+SD Watch revision=10 仅标识本次固件组合，不表示另换了 SD 协议或参数。
+
+Watch 新增 `g_bmi088_spi2_poll_diag`（revision=1）：
+`transfer_count` 为该限定路径调用次数；`tick_boundary_avoided_count` 统计跨 tick 但实际预算未超的传输；
+`completed_after_deadline_count` 统计到期后确认数据已齐全的传输，不表示额外重读传感器。
+`timeout_count` / `hardware_error_count` 记录真正等待失败/观察到硬件错误的次数。
+`first_fault` 在 HAL 清理寄存器之前冻结首错，phase=1 表示 TX/RX 停滞，2 为 EOT，3 为硬件标志；
+含未收发字节数、SPI_SR/CR1/CR2/CFG1 和已用微秒，后续成功不会覆盖。
+重新上电/复位清零；调试可将 first_fault.complete=0 后捕获下一次。
+
+构建目录为 `MDK-ARM/sd-spi-rev10-o0` / `sd-spi-rev10-o3`，HEX 使用同目录 AXF。
+实机拆桨确认 revision=10 后，检查 BMI088 read_hz、read_error_count、数据 valid/age，
+以及上述首错与 SD 队列、丢帧。跨 tick 避免计数增长并非采集错误。
+本次并未消除此前运行中 SD 丢弃的 311 帧；长写入和后台扩容的队列预算仍需处理和验证。
+修复 BMI088 持续采集后，需重新验证同时 2kHz IMU 与 1kHz SD 的负载，不能只用停采期间的写卡速率判断。
+未烧录硬件，不把主机回归/编译结果视为实机零丢帧。
+
+本轮软件验证：实际 HAL 函数的 1..10 字节、tick/DWT 回绕、RX 尚未齐全的 tick 边界、
+到期后 RX/EOT 完成、FIFO 尾部、真实 TX/RX/EOT 停滞、DWT 禁用/停止、硬件错误与首错冻结测试通过。
+SD 全套主机回归及基础/扩展 schema 各 2000 条 DATA 转换检查通过。
+O0/O3 均完成 64 源文件编译链接且无编译警告；BMI088 任务静态栈分别 740/360 字节，配置 1024 字节。
+控制、光流、BMI088 采集/温补/低通回归通过；完整回归仍在既有温控测试第 39 行的 pwm_ccr=100 断言停止，
+本次未修改温控参数。AHRS 单独包含在 SD 回归中且通过。
+
 继续使用STM32F407VET6黑匣子/tools/blackbox_to_csv.py：
 ```powershell
 python tools/blackbox_to_csv.py 'E:/B*.BIN' -o flight.csv --report flight.report.json

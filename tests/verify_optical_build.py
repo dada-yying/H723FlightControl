@@ -57,7 +57,10 @@ assert "dma_transfer(514)" in sd and "dma_transfer(516)" in sd
 assert "poll_transfer(p,NULL,6)" in sd
 assert "SPI1_SD_EotGuard(&hspi1_sd)" in sd
 assert "short_deadline_rechecks" in sd and "SPI_SR_RXPLVL" in sd
-assert "g_sd_spi_diag.revision=9" in sd
+assert "g_sd_spi_diag.revision=10" in sd
+assert "Bmi088Spi2Poll_Begin(&bmi088_guard,hspi,Timeout,tickstart)" in spi
+assert "Bmi088Spi2Poll_WaitEot(&bmi088_guard,hspi)" in spi
+assert re.search(r"g_bmi088_spi2_poll_diag\s+0x[0-9a-fA-F]+\s+Data", mapping)
 protocol = (root / "App/blackbox_protocol.h").read_text(encoding="utf-8")
 assert "#define SBB_CRC32_IMPL BlackboxCrc32" in protocol
 tasks = (root / "Core/Src/freertos.c").read_text(encoding="utf-8")
@@ -73,4 +76,4 @@ for obj, size in (("blackbox", 1024), ("blackbox_storage", 1024),
                       r"\s+" + obj + r"\.o\(\.constdata\)", mapping, re.M)
     assert found and 0x08000000 <= int(found[1], 16) < 0x08100000, obj
 print("CRC32/CRC16 tables are read-only Flash data, no RAM/RTOS heap allocation")
-print("SD revision 9: bounded short transfers, block DMA, table CRC and Normal storage; BMI/sampler/flight stay higher")
+print("Revision 10: BMI088 SPI2 precise timeout/fault capture; SD CRC/DMA and task priorities retained")

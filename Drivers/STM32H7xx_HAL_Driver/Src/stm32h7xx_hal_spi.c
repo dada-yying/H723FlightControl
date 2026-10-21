@@ -136,6 +136,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "stm32h7xx_hal.h"
 #include "stm32h7xx_spi1_eot_guard.h"
+#include "stm32h7xx_bmi088_spi2_poll_guard.h"
 
 /** @addtogroup STM32H7xx_HAL_Driver
   * @{
@@ -149,6 +150,7 @@
 
 /* SPI1 SD: completed byte observed after a task-preemption deadline. */
 volatile uint32_t g_spi1_completed_after_deadline_count;
+volatile Bmi088Spi2PollDiag_t g_bmi088_spi2_poll_diag;
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private defines -----------------------------------------------------------*/
@@ -1256,6 +1258,7 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, const uint8_t
   uint32_t   tickstart;
   uint16_t   initial_TxXferCount;
   uint16_t   initial_RxXferCount;
+  Bmi088Spi2PollGuard_t bmi088_guard;
 
   /* Check Direction parameter */
   assert_param(IS_SPI_DIRECTION_2LINES(hspi->Init.Direction));
@@ -1268,6 +1271,7 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, const uint8_t
 
   initial_TxXferCount = Size;
   initial_RxXferCount = Size;
+  Bmi088Spi2Poll_Begin(&bmi088_guard,hspi,Timeout,tickstart);
 
   if (hspi->State != HAL_SPI_STATE_READY)
   {
@@ -1418,9 +1422,37 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, const uint8_t
         initial_RxXferCount = hspi->RxXferCount;
       }
 
-      /* Timeout management */
-      if ((((HAL_GetTick() - tickstart) >=  Timeout) && (Timeout != HAL_MAX_DELAY)) || (Timeout == 0U))
+      /* BMI088 uses a real 1ms DWT budget, not a millisecond tick edge. */
+      if (bmi088_guard.enabled ? Bmi088Spi2Poll_Expired(&bmi088_guard) :
+          ((((HAL_GetTick() - tickstart) >= Timeout) && (Timeout != HAL_MAX_DELAY)) || (Timeout == 0U)))
       {
+        if (bmi088_guard.enabled)
+        {
+          /* Re-read actual FIFO state AFTER expiry: the task may have been
+           * preempted after testing RXP. Drain only already-transmitted data;
+           * never fabricate missing bytes or restart an incomplete command. */
+          while ((initial_TxXferCount == 0U) && (initial_RxXferCount > 0U) &&
+                 (__HAL_SPI_GET_FLAG(hspi, SPI_FLAG_RXP) ||
+                  (hspi->Instance->SR & (SPI_SR_RXWNE | SPI_SR_RXPLVL))))
+          {
+            *((uint8_t *)hspi->pRxBuffPtr) = *((__IO uint8_t *)&hspi->Instance->RXDR);
+            hspi->pRxBuffPtr++;
+            hspi->RxXferCount--;
+            initial_RxXferCount = hspi->RxXferCount;
+          }
+          if ((initial_TxXferCount == 0U) && (initial_RxXferCount == 0U))
+          {
+            g_bmi088_spi2_poll_diag.completed_after_deadline_count++;
+            break; /* EOT and hardware error checks below still run. */
+          }
+          g_bmi088_spi2_poll_diag.timeout_count++;
+          if (hspi->Instance->SR & (SPI_SR_OVR | SPI_SR_UDR | SPI_SR_MODF | SPI_SR_TIFRE))
+          {
+            g_bmi088_spi2_poll_diag.hardware_error_count++;
+            Bmi088Spi2Poll_Fault(&bmi088_guard,hspi,3);
+          }
+          else Bmi088Spi2Poll_Fault(&bmi088_guard,hspi,1);
+        }
         /* A higher-priority task may preempt between TX and the final RX.
          * For SD SPI1, consume already-available data before treating elapsed
          * wall time as a transfer failure. EOT/error checking still follows. */
@@ -1444,11 +1476,18 @@ HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, const uint8_t
   }
 
   /* Wait for Tx/Rx (and CRC) data to be sent/received */
-  if (SPI_WaitOnFlagUntilTimeout(hspi, SPI_FLAG_EOT, RESET, Timeout, tickstart) != HAL_OK)
+  if ((bmi088_guard.enabled ? Bmi088Spi2Poll_WaitEot(&bmi088_guard,hspi) :
+       SPI_WaitOnFlagUntilTimeout(hspi, SPI_FLAG_EOT, RESET, Timeout, tickstart)) != HAL_OK)
   {
     SET_BIT(hspi->ErrorCode, HAL_SPI_ERROR_FLAG);
   }
 
+  if (bmi088_guard.enabled &&
+      (hspi->Instance->SR & (SPI_SR_OVR | SPI_SR_UDR | SPI_SR_MODF | SPI_SR_TIFRE)))
+  {
+    g_bmi088_spi2_poll_diag.hardware_error_count++;
+    Bmi088Spi2Poll_Fault(&bmi088_guard,hspi,3);
+  }
   /* Call standard close procedure with error check */
   SPI_CloseTransfer(hspi);
 
