@@ -7,12 +7,23 @@ extern SPI_HandleTypeDef hspi1_sd;
 extern DMA_HandleTypeDef hdma_spi1_tx, hdma_spi1_rx;
 #endif
 /* Observations only. First CMD0 freezes until Watch sets complete=0. */
-typedef enum {
-    SD_INIT_NONE=0, SD_INIT_CLOCKS, SD_INIT_CMD0, SD_INIT_CMD8,
-    SD_INIT_ACMD41, SD_INIT_OCR, SD_INIT_BLOCK_LENGTH, SD_INIT_CRC,
-    SD_INIT_CSD, SD_INIT_CID, SD_INIT_FAST_SPI, SD_INIT_READY
+typedef enum
+{
+    SD_INIT_NONE = 0,
+    SD_INIT_CLOCKS,
+    SD_INIT_CMD0,
+    SD_INIT_CMD8,
+    SD_INIT_ACMD41,
+    SD_INIT_OCR,
+    SD_INIT_BLOCK_LENGTH,
+    SD_INIT_CRC,
+    SD_INIT_CSD,
+    SD_INIT_CID,
+    SD_INIT_FAST_SPI,
+    SD_INIT_READY
 } SdSpiInitStage_t;
-typedef struct {
+typedef struct
+{
     uint32_t complete, attempt, tick_ms, duration_us;
     uint32_t gpio_checked, cs_not_low_count;
     uint32_t sck_not_low_count, sck_not_high_count, mosi_mismatch_count;
@@ -21,15 +32,31 @@ typedef struct {
     uint8_t rx_count, r1;
     uint8_t cs_mode, sck_mode, mosi_mode, miso_mode, miso_pull;
 } SdSpiCmd0Trace_t;
-typedef enum {SD_IO_NONE=0,SD_IO_READ,SD_IO_WRITE,SD_IO_SYNC} SdSpiIoOperation_t;
-typedef enum {
-    SD_IO_FAULT_NONE=0,SD_IO_FAULT_BYTE_HAL,SD_IO_FAULT_CARD_BUSY,
-    SD_IO_FAULT_DMA_START,SD_IO_FAULT_DMA_WAIT,SD_IO_FAULT_DMA_IRQ,
-    SD_IO_FAULT_READ_TOKEN,SD_IO_FAULT_DATA_RESPONSE,SD_IO_FAULT_DATA_CRC,
+typedef enum
+{
+    SD_IO_NONE = 0,
+    SD_IO_READ,
+    SD_IO_WRITE,
+    SD_IO_SYNC
+} SdSpiIoOperation_t;
+typedef enum
+{
+    SD_IO_FAULT_NONE = 0,
+    SD_IO_FAULT_BYTE_HAL,
+    SD_IO_FAULT_CARD_BUSY,
+    SD_IO_FAULT_DMA_START,
+    SD_IO_FAULT_DMA_WAIT,
+    SD_IO_FAULT_DMA_IRQ,
+    SD_IO_FAULT_READ_TOKEN,
+    SD_IO_FAULT_DATA_RESPONSE,
+    SD_IO_FAULT_DATA_CRC,
     SD_IO_FAULT_COMMAND,
-    SD_IO_FAULT_SHORT_TIMEOUT,SD_IO_FAULT_SHORT_HW,SD_IO_FAULT_TRANSPORT_BUSY
+    SD_IO_FAULT_SHORT_TIMEOUT,
+    SD_IO_FAULT_SHORT_HW,
+    SD_IO_FAULT_TRANSPORT_BUSY
 } SdSpiIoFaultKind_t;
-typedef struct {
+typedef struct
+{
     uint32_t complete, init_attempt, tick_ms, elapsed_ms;
     SdSpiIoOperation_t operation;
     SdSpiIoFaultKind_t kind;
@@ -40,7 +67,8 @@ typedef struct {
     uint8_t command, r1, byte_tx, byte_rx, fast_mode;
     uint8_t dma_complete, dma_failed;
 } SdSpiIoFault_t;
-typedef struct {
+typedef struct
+{
     uint32_t version, revision, init_attempts, init_successes, init_failures;
     SdSpiInitStage_t stage, failed_stage;
     uint32_t command_count, ready_timeouts, response_timeouts;
@@ -71,7 +99,7 @@ typedef struct {
     uint32_t dma_latency_samples;
     uint64_t dma_irq_total_us, dma_resume_total_us;
 } SdSpiDiag_t;
-extern volatile SdSpiDiag_t g_sd_spi_diag;
+void SdSpi_GetDiagnostics(SdSpiDiag_t *diag);
 int BB_CardPresent(void); /* No detect pin: presence is determined by commands. */
 void BB_CardIdentity(uint32_t cid[4]);
 HAL_StatusTypeDef BB_RandomSession(uint8_t session[16]);

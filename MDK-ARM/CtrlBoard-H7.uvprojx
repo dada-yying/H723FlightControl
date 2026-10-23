@@ -640,9 +640,9 @@
               <FilePath>../App/esc_pwm.c</FilePath>
             </File>
             <File>
-              <FileName>ws2812_ctrl.c</FileName>
+              <FileName>bsp_dwt.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\App\ws2812_ctrl.c</FilePath>
+              <FilePath>../BSP/bsp_dwt.c</FilePath>
             </File>
           </Files>
         </Group>

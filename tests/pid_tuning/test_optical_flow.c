@@ -9,7 +9,7 @@ static void boot(void)
 {
     test_tick=0; test_rx_status=test_rx_abort_status=HAL_OK;
     OpticalFlow_Init(HAL_OK); OpticalFlow_ProcessPending(); dma_write=0;
-    assert(g_optical_flow_stats.receiving);
+    assert(s_optical_task_stats.receiving);
 }
 static void deliver(const uint8_t *p, unsigned n, int process)
 {
@@ -58,12 +58,12 @@ int main(int argc, char **argv)
     }
     boot();
     for(i=0;i<200;i++) { deliver(good,27,1); }
-    assert(g_optical_flow_data.rx_count==200 && g_optical_flow_stats.byte_count==5400);
+    assert(g_optical_flow_data.rx_count==200 && s_optical_isr_stats.byte_count==5400);
     memcpy(bad,good,27); bad[26]^=1; deliver(bad,27,1);
-    assert(g_optical_flow_stats.checksum_errors && g_optical_flow_data.rx_count==200);
+    assert(s_optical_task_stats.checksum_errors && g_optical_flow_data.rx_count==200);
     memset(bad,0x55,sizeof(bad)); deliver(bad,71,1);
     memcpy(bad,good,27); bad[5]=255; deliver(bad,27,1);
-    assert(g_optical_flow_stats.length_errors);
+    assert(s_optical_task_stats.length_errors);
     memcpy(bad,good,27); bad[3]=0x52; checksum(bad,27); deliver(bad,27,1);
     assert(g_optical_flow_data.rx_count==200);
     deliver(good,27,1); assert(g_optical_flow_data.rx_count==201);
@@ -74,28 +74,28 @@ int main(int argc, char **argv)
     /* Overflow invalidates partial data and retries in task context. */
     count=g_optical_flow_data.rx_count;
     for(i=0;i<40;i++) deliver(good,27,0);
-    assert(g_optical_flow_stats.queue_overflows==1);
+    assert(s_optical_isr_stats.queue_overflows==1);
     OpticalFlow_ProcessPending(); dma_write=0;
     assert(g_optical_flow_data.rx_count==count);
     deliver(good,27,1); assert(g_optical_flow_data.rx_count==count+1);
     huart10.ErrorCode=8; OpticalFlow_OnError(&huart10);
     test_rx_status=HAL_BUSY; OpticalFlow_ProcessPending();
-    count=g_optical_flow_stats.restart_count;
-    test_tick+=99; OpticalFlow_ProcessPending(); assert(g_optical_flow_stats.restart_count==count);
+    count=s_optical_task_stats.restart_count;
+    test_tick+=99; OpticalFlow_ProcessPending(); assert(s_optical_task_stats.restart_count==count);
     test_tick++; test_rx_status=HAL_OK; OpticalFlow_ProcessPending(); dma_write=0;
-    assert(g_optical_flow_stats.receiving && g_optical_flow_stats.restart_count==count+1);
+    assert(s_optical_task_stats.receiving && s_optical_task_stats.restart_count==count+1);
     deliver(good,27,1); assert(g_optical_flow_data.rx_count==203+1);
-    count=g_optical_flow_stats.uart_errors; OpticalFlow_OnError(&huart5);
-    OpticalFlow_OnRxEvent(&huart7); assert(g_optical_flow_stats.uart_errors==count);
+    count=s_optical_isr_stats.uart_errors; OpticalFlow_OnError(&huart5);
+    OpticalFlow_OnRxEvent(&huart7); assert(s_optical_isr_stats.uart_errors==count);
     test_rx_abort_status=HAL_TIMEOUT; OpticalFlow_OnError(&huart10); OpticalFlow_ProcessPending();
-    assert(!g_optical_flow_stats.receiving);
+    assert(!s_optical_task_stats.receiving);
     /* Tick wrap and >49 day stale saturation: no stale sample resurrection. */
     boot(); test_tick=0xfffffff0U; deliver(good,27,1);
     test_tick=0x10; OpticalFlow_GetData(&d); assert(d.age_ms==32);
     test_tick=0xfffffff0U; OpticalFlow_ProcessPending();
     test_tick=0x20; OpticalFlow_GetData(&d); assert(d.age_ms==UINT32_MAX);
     deliver(good,27,1); OpticalFlow_GetData(&d); assert(d.age_ms==0);
-    OpticalFlow_Init(HAL_ERROR); OpticalFlow_ProcessPending(); assert(!g_optical_flow_stats.receiving);
+    OpticalFlow_Init(HAL_ERROR); OpticalFlow_ProcessPending(); assert(!s_optical_task_stats.receiving);
     /* An incomplete oversized unknown candidate must resync to the embedded
      * complete known frame after checksum failure, retaining its own RX tick. */
     boot(); memset(bad,0,71); bad[0]=0xef; bad[3]=0x52; bad[5]=64;

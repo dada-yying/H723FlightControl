@@ -42,10 +42,10 @@
 #define RC_SBUS_DMA_BUFFER_SIZE 64U
 #define RC_SBUS_RX_RING_SIZE 128U
 
-volatile RcSbusData_t g_rc_sbus_data;
+static RcSbusData_t g_rc_sbus_data;
 /* Explicit linker placement in DMA1-accessible SRAM; never DTCM. */
-__attribute__((section(".sbus_dma"), aligned(32)))
-static uint8_t s_uart5_dma_buffer[RC_SBUS_DMA_BUFFER_SIZE];
+__attribute__((section(".sbus_dma"),
+               aligned(32))) static uint8_t s_uart5_dma_buffer[RC_SBUS_DMA_BUFFER_SIZE];
 static uint8_t s_rx_ring[RC_SBUS_RX_RING_SIZE];
 static volatile uint16_t s_rx_head;
 static volatile uint16_t s_rx_tail;
@@ -69,20 +69,23 @@ static void RcSbus_NotifyFromISR(void)
 
 static float RcSbus_MapThrottle(uint16_t value)
 {
-    if (value <= RC_SBUS_THROTTLE_MIN) return 0.0f;
-    if (value >= RC_SBUS_THROTTLE_MAX) return 1.0f;
+    if (value <= RC_SBUS_THROTTLE_MIN)
+        return 0.0f;
+    if (value >= RC_SBUS_THROTTLE_MAX)
+        return 1.0f;
     return (float)(value - RC_SBUS_THROTTLE_MIN) /
            (float)(RC_SBUS_THROTTLE_MAX - RC_SBUS_THROTTLE_MIN);
 }
 
-static float RcSbus_MapCentered(uint16_t value, uint16_t minimum,
-                               uint16_t center, uint16_t maximum)
+static float RcSbus_MapCentered(uint16_t value, uint16_t minimum, uint16_t center, uint16_t maximum)
 {
     float normalized;
     /* Convert before subtraction so the centered difference is signed.
      * Normalize each side independently, preserving asymmetric travel. */
-    if (value < minimum) value = minimum;
-    if (value > maximum) value = maximum;
+    if (value < minimum)
+        value = minimum;
+    if (value > maximum)
+        value = maximum;
     if (value >= center)
         normalized = ((float)value - (float)center) / ((float)maximum - (float)center);
     else
@@ -104,79 +107,109 @@ static uint16_t RcSbus_UnpackChannel(const uint8_t frame[RC_SBUS_FRAME_SIZE], ui
     return (uint16_t)((packed >> (bit_offset & 0x07U)) & 0x07FFU);
 }
 
+static void RcSbus_MakeSafe(RcSbusData_t *next)
+{
+    next->throttle = 0.0f;
+    next->roll_target_rad = 0.0f;
+    next->pitch_target_rad = 0.0f;
+    next->yaw_rate_target_rad_s = 0.0f;
+    next->valid = 0U;
+    next->tuning_rate_rad_s = 0.0f;
+    next->tuning_axis_valid = 0U;
+    s_axis_confirm_count = 0U;
+}
+
+static void RcSbus_Publish(const RcSbusData_t *next)
+{
+    /* RC-C1: complete published RC snapshot; budget 3 us, NOT measured.
+     * Sole writer is RcTask; decoding and floating-point mapping stay outside. */
+    taskENTER_CRITICAL();
+    g_rc_sbus_data = *next;
+    taskEXIT_CRITICAL();
+}
+
 static void RcSbus_PublishSafe(void)
 {
-    taskENTER_CRITICAL();
-    g_rc_sbus_data.throttle = 0.0f;
-    g_rc_sbus_data.roll_target_rad = 0.0f;
-    g_rc_sbus_data.pitch_target_rad = 0.0f;
-    g_rc_sbus_data.yaw_rate_target_rad_s = 0.0f;
-    g_rc_sbus_data.valid = 0U;
-    g_rc_sbus_data.tuning_rate_rad_s = 0.0f;
-    g_rc_sbus_data.tuning_axis_valid = 0U;
-    s_axis_confirm_count = 0U;
-    taskEXIT_CRITICAL();
+    RcSbusData_t next = g_rc_sbus_data;
+    RcSbus_MakeSafe(&next);
+    RcSbus_Publish(&next);
 }
 
 static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
 {
+    RcSbusData_t next = g_rc_sbus_data;
     uint8_t index;
     RcTuningAxis_t candidate;
     const uint8_t flags = frame[23];
-    g_rc_sbus_data.frame_count++;
+    next.frame_count++;
     for (index = 0U; index < RC_SBUS_CHANNEL_COUNT; index++)
-        g_rc_sbus_data.channel[index] = RcSbus_UnpackChannel(frame, index);
-    g_rc_sbus_data.ch17 = ((flags & RC_SBUS_FLAG_CH17) != 0U) ? 1U : 0U;
-    g_rc_sbus_data.ch18 = ((flags & RC_SBUS_FLAG_CH18) != 0U) ? 1U : 0U;
-    g_rc_sbus_data.frame_lost = ((flags & RC_SBUS_FLAG_FRAME_LOST) != 0U) ? 1U : 0U;
-    g_rc_sbus_data.failsafe = ((flags & RC_SBUS_FLAG_FAILSAFE) != 0U) ? 1U : 0U;
-    if (g_rc_sbus_data.frame_lost != 0U) g_rc_sbus_data.frame_lost_count++;
-    if (g_rc_sbus_data.failsafe != 0U) g_rc_sbus_data.failsafe_count++;
+        next.channel[index] = RcSbus_UnpackChannel(frame, index);
+    next.ch17 = ((flags & RC_SBUS_FLAG_CH17) != 0U) ? 1U : 0U;
+    next.ch18 = ((flags & RC_SBUS_FLAG_CH18) != 0U) ? 1U : 0U;
+    next.frame_lost = ((flags & RC_SBUS_FLAG_FRAME_LOST) != 0U) ? 1U : 0U;
+    next.failsafe = ((flags & RC_SBUS_FLAG_FAILSAFE) != 0U) ? 1U : 0U;
+    if (next.frame_lost != 0U)
+        next.frame_lost_count++;
+    if (next.failsafe != 0U)
+        next.failsafe_count++;
     /* Receiver failsafe takes precedence, including when both flags are set. */
-    if (g_rc_sbus_data.failsafe != 0U)
+    if (next.failsafe != 0U)
     {
-        RcSbus_PublishSafe();
+        RcSbus_MakeSafe(&next);
+        RcSbus_Publish(&next);
         return;
     }
-    if (g_rc_sbus_data.frame_lost != 0U)
+    if (next.frame_lost != 0U)
     {
         s_axis_confirm_count = 0U;
         /* Keep the last GOOD targets only within the existing 100 ms window.
          * Never refresh last_valid_tick or valid_frame_count on a lost frame.
          * Raw channels above remain available for diagnostics, not control. */
-        RcSbus_CheckTimeout();
+        if (next.valid && (uint32_t)(HAL_GetTick() - next.last_valid_tick) >= RC_SBUS_TIMEOUT_MS)
+            RcSbus_MakeSafe(&next);
+        RcSbus_Publish(&next);
         return;
     }
     /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw.
      * Measured right-roll/right-yaw increase raw values; forward-pitch decreases.
      * Targets are radians (roll/pitch) and radians/second (yaw rate). */
-    g_rc_sbus_data.throttle = RcSbus_MapThrottle(g_rc_sbus_data.channel[2]);
-    g_rc_sbus_data.roll_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
-        RcSbus_MapCentered(g_rc_sbus_data.channel[0], RC_SBUS_ROLL_MIN,
-                          RC_SBUS_ROLL_CENTER, RC_SBUS_ROLL_MAX) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.pitch_target_rad = RC_SBUS_PITCH_TARGET_SIGN *
-        RcSbus_MapCentered(g_rc_sbus_data.channel[1], RC_SBUS_PITCH_MIN,
-                          RC_SBUS_PITCH_CENTER, RC_SBUS_PITCH_MAX) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.yaw_rate_target_rad_s = RC_SBUS_YAW_RATE_TARGET_SIGN *
-        RcSbus_MapCentered(g_rc_sbus_data.channel[3], RC_SBUS_YAW_MIN,
-                          RC_SBUS_YAW_CENTER, RC_SBUS_YAW_MAX) * RC_SBUS_MAX_YAW_RATE_RAD_S;
-    g_rc_sbus_data.last_valid_tick = HAL_GetTick();
+    next.throttle = RcSbus_MapThrottle(next.channel[2]);
+    next.roll_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
+                                     RcSbus_MapCentered(next.channel[0], RC_SBUS_ROLL_MIN,
+                                                        RC_SBUS_ROLL_CENTER, RC_SBUS_ROLL_MAX) *
+                                     RC_SBUS_MAX_TILT_RAD;
+    next.pitch_target_rad =
+        RC_SBUS_PITCH_TARGET_SIGN *
+        RcSbus_MapCentered(next.channel[1], RC_SBUS_PITCH_MIN, RC_SBUS_PITCH_CENTER,
+                           RC_SBUS_PITCH_MAX) *
+        RC_SBUS_MAX_TILT_RAD;
+    next.yaw_rate_target_rad_s =
+        RC_SBUS_YAW_RATE_TARGET_SIGN *
+        RcSbus_MapCentered(next.channel[3], RC_SBUS_YAW_MIN, RC_SBUS_YAW_CENTER,
+                           RC_SBUS_YAW_MAX) *
+        RC_SBUS_MAX_YAW_RATE_RAD_S;
+    next.last_valid_tick = HAL_GetTick();
     /* Physical high is the smaller SBUS value on this transmitter. */
-    g_rc_sbus_data.tuning_rate_rad_s = -RcSbus_MapCentered(
-        g_rc_sbus_data.channel[9], RC_TUNING_MIN, RC_TUNING_CENTER,
-        RC_TUNING_MAX) * RC_TUNING_MAX_RATE;
-    candidate = (g_rc_sbus_data.channel[4] < RC_TUNING_AXIS_LOW_BOUND) ? RC_TUNING_PITCH :
-        ((g_rc_sbus_data.channel[4] > RC_TUNING_AXIS_HIGH_BOUND) ? RC_TUNING_ROLL : RC_TUNING_YAW);
-    if (candidate != s_axis_candidate) s_axis_confirm_count = 0U;
+    next.tuning_rate_rad_s = -RcSbus_MapCentered(next.channel[9], RC_TUNING_MIN,
+                                                           RC_TUNING_CENTER, RC_TUNING_MAX) *
+                                       RC_TUNING_MAX_RATE;
+    candidate = (next.channel[4] < RC_TUNING_AXIS_LOW_BOUND)
+                    ? RC_TUNING_PITCH
+                    : ((next.channel[4] > RC_TUNING_AXIS_HIGH_BOUND) ? RC_TUNING_ROLL
+                                                                               : RC_TUNING_YAW);
+    if (candidate != s_axis_candidate)
+        s_axis_confirm_count = 0U;
     s_axis_candidate = candidate;
-    if (s_axis_confirm_count < RC_TUNING_CONFIRM_FRAMES) s_axis_confirm_count++;
+    if (s_axis_confirm_count < RC_TUNING_CONFIRM_FRAMES)
+        s_axis_confirm_count++;
     if (s_axis_confirm_count >= RC_TUNING_CONFIRM_FRAMES)
     {
-        g_rc_sbus_data.tuning_axis = candidate;
-        g_rc_sbus_data.tuning_axis_valid = 1U;
+        next.tuning_axis = candidate;
+        next.tuning_axis_valid = 1U;
     }
-    g_rc_sbus_data.valid_frame_count++;
-    g_rc_sbus_data.valid = 1U;
+    next.valid_frame_count++;
+    next.valid = 1U;
+    RcSbus_Publish(&next);
 }
 
 static void RcSbus_ConsumeByte(uint8_t byte)
@@ -191,22 +224,22 @@ static void RcSbus_ConsumeByte(uint8_t byte)
         return;
     }
     s_frame[s_frame_index++] = byte;
-    if (s_frame_index < RC_SBUS_FRAME_SIZE) return;
+    if (s_frame_index < RC_SBUS_FRAME_SIZE)
+        return;
     /* R7008SB: original SBUS, telemetry slot footer, or FASSTest 12CH footer. */
-    if ((byte == RC_SBUS_FRAME_END) || (byte == 0x08U) ||
-        ((byte & 0xCFU) == 0x04U))
+    if ((byte == RC_SBUS_FRAME_END) || (byte == 0x08U) || ((byte & 0xCFU) == 0x04U))
     {
-        /* Protect publication against the higher-priority control task. */
-        taskENTER_CRITICAL();
         RcSbus_ProcessFrame(s_frame);
-        taskEXIT_CRITICAL();
         s_frame_index = 0U;
     }
     else
     {
-        g_rc_sbus_data.frame_error_count++;
+        RcSbusData_t next = g_rc_sbus_data;
+        next.frame_error_count++;
+        RcSbus_Publish(&next);
         s_frame_index = (byte == RC_SBUS_FRAME_HEADER) ? 1U : 0U;
-        if (s_frame_index != 0U) s_frame[0] = byte;
+        if (s_frame_index != 0U)
+            s_frame[0] = byte;
     }
 }
 
@@ -219,8 +252,7 @@ static HAL_StatusTypeDef RcSbus_ArmUart5Reception(void)
      * The buffer owns two complete, aligned cache lines. */
     if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
     {
-        SCB_CleanInvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer,
-                                        RC_SBUS_DMA_BUFFER_SIZE);
+        SCB_CleanInvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
     }
     __DSB(); /* Complete CPU memory accesses before handing the buffer to DMA. */
     status = HAL_UARTEx_ReceiveToIdle_DMA(&huart5, s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
@@ -255,7 +287,10 @@ HAL_StatusTypeDef RcSbus_StartReception(void)
     s_restart_pending = 1U;
     return HAL_OK;
 }
-void RcSbus_SetTaskHandle(TaskHandle_t task_handle) { s_rc_task_handle = task_handle; }
+void RcSbus_SetTaskHandle(TaskHandle_t task_handle)
+{
+    s_rc_task_handle = task_handle;
+}
 
 void RcSbus_ProcessPending(void)
 {
@@ -264,9 +299,10 @@ void RcSbus_ProcessPending(void)
     {
         /* Blocking HAL abort is TASK ONLY. Never restart/abort recursively in ISR. */
         RcSbus_PublishSafe();
-        if (HAL_UART_AbortReceive(&huart5) != HAL_OK) return;
-        __HAL_UART_CLEAR_FLAG(&huart5, UART_CLEAR_PEF | UART_CLEAR_FEF |
-                            UART_CLEAR_NEF | UART_CLEAR_OREF | UART_CLEAR_IDLEF);
+        if (HAL_UART_AbortReceive(&huart5) != HAL_OK)
+            return;
+        __HAL_UART_CLEAR_FLAG(&huart5, UART_CLEAR_PEF | UART_CLEAR_FEF | UART_CLEAR_NEF |
+                                           UART_CLEAR_OREF | UART_CLEAR_IDLEF);
         __HAL_UART_SEND_REQ(&huart5, UART_RXDATA_FLUSH_REQUEST);
         s_rx_tail = s_rx_head;
         s_frame_index = 0U;
@@ -275,7 +311,11 @@ void RcSbus_ProcessPending(void)
         return; /* retry on next task timeout if start failed */
     }
     tail = s_rx_tail;
-    g_rc_sbus_data.rx_overrun_count = s_rx_overrun_count;
+    {
+        RcSbusData_t next = g_rc_sbus_data;
+        next.rx_overrun_count = s_rx_overrun_count;
+        RcSbus_Publish(&next);
+    }
     while (tail != s_rx_head)
     {
         if (s_restart_pending != 0U)
@@ -298,9 +338,11 @@ void RcSbus_CheckTimeout(void)
 
 void RcSbus_GetData(RcSbusData_t *data)
 {
-    if (data == NULL) return;
+    if (data == NULL)
+        return;
+    /* RC-C2: reader snapshot; budget 3 us, NOT measured. */
     taskENTER_CRITICAL();
-    (void)memcpy(data, (const void *)&g_rc_sbus_data, sizeof(*data));
+    *data = g_rc_sbus_data;
     taskEXIT_CRITICAL();
 }
 
@@ -308,11 +350,13 @@ void RcSbus_RxBytesFromISR(const uint8_t *data, uint16_t length)
 {
     uint16_t index;
     BaseType_t higher_priority_task_woken = pdFALSE;
-    if (data == NULL) return;
+    if (data == NULL)
+        return;
     for (index = 0U; index < length; index++)
     {
         uint16_t next_head = s_rx_head + 1U;
-        if (next_head >= RC_SBUS_RX_RING_SIZE) next_head = 0U;
+        if (next_head >= RC_SBUS_RX_RING_SIZE)
+            next_head = 0U;
         if (next_head == s_rx_tail)
         {
             s_rx_overrun_count++;
@@ -331,16 +375,22 @@ void RcSbus_RxBytesFromISR(const uint8_t *data, uint16_t length)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
-    if (huart == &huart10) { OpticalFlow_OnRxEvent(huart); return; }
-    if (huart != &huart5) return;
-    if (s_restart_pending != 0U) return;
-    if (size > RC_SBUS_DMA_BUFFER_SIZE) size = RC_SBUS_DMA_BUFFER_SIZE;
+    if (huart == &huart10)
+    {
+        OpticalFlow_OnRxEvent(huart);
+        return;
+    }
+    if (huart != &huart5)
+        return;
+    if (s_restart_pending != 0U)
+        return;
+    if (size > RC_SBUS_DMA_BUFFER_SIZE)
+        size = RC_SBUS_DMA_BUFFER_SIZE;
     if (size != 0U)
     {
         if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
         {
-            SCB_InvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer,
-                                       RC_SBUS_DMA_BUFFER_SIZE);
+            SCB_InvalidateDCache_by_Addr((uint32_t *)s_uart5_dma_buffer, RC_SBUS_DMA_BUFFER_SIZE);
         }
         __DSB(); /* Complete maintenance before copying received bytes. */
         RcSbus_RxBytesFromISR(s_uart5_dma_buffer, size);
@@ -350,13 +400,19 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    if (huart == &huart10) OpticalFlow_OnRxByte(huart);
+    if (huart == &huart10)
+        OpticalFlow_OnRxByte(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-    if (huart == &huart10) { OpticalFlow_OnError(huart); return; }
-    if (huart != &huart5) return;
+    if (huart == &huart10)
+    {
+        OpticalFlow_OnError(huart);
+        return;
+    }
+    if (huart != &huart5)
+        return;
     /* HAL has aborted DMA. Request recovery in task context. */
     s_restart_pending = 1U;
     RcSbus_NotifyFromISR();

@@ -1,0 +1,20 @@
+waiting CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=1
+39C_first CCR=120 integral=0 duty=0.0120000001 integral_hex=0x0p+0 duty_hex=0x1.89374cp-7 limit=1500 reason=0
+39C_20ms CCR=120 integral=0.300000012 duty=0.0120000001 integral_hex=0x1.333334p-2 duty_hex=0x1.89374cp-7 limit=1500 reason=0
+39C_40ms CCR=121 integral=0.600000024 duty=0.0120999999 integral_hex=0x1.333334p-1 duty_hex=0x1.8c7e28p-7 limit=1500 reason=0
+cadence_hold CCR=121 integral=0.600000024 duty=0.0120999999 integral_hex=0x1.333334p-1 duty_hex=0x1.8c7e28p-7 limit=1500 reason=0
+age19 CCR=121 integral=0.600000024 duty=0.0120999999 integral_hex=0x1.333334p-1 duty_hex=0x1.8c7e28p-7 limit=1500 reason=0
+age20_stop CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=3
+timeout_recovery CCR=120 integral=0 duty=0.0120000001 integral_hex=0x0p+0 duty_hex=0x1.89374cp-7 limit=1500 reason=0
+50ms_integral CCR=121 integral=0.75 duty=0.0120999999 integral_hex=0x1.8p-1 duty_hex=0x1.8c7e28p-7 limit=1500 reason=0
+gap_reset CCR=120 integral=0 duty=0.0120000001 integral_hex=0x0p+0 duty_hex=0x1.89374cp-7 limit=1500 reason=0
+cold_saturation CCR=1500 integral=0 duty=0.150000006 integral_hex=0x0p+0 duty_hex=0x1.333334p-3 limit=1500 reason=0
+saturation_1000_steps CCR=1500 integral=0 duty=0.150000006 integral_hex=0x0p+0 duty_hex=0x1.333334p-3 limit=1500 reason=0
+manual_stop CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=6
+above_target_lower_saturation CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=0
+overtemperature CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=5
+latched_after_cooling CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=5
+before_spi_fault CCR=1200 integral=0 duty=0.119999997 integral_hex=0x0p+0 duty_hex=0x1.eb851ep-4 limit=1500 reason=0
+spi_fault CCR=0 integral=0 duty=0 integral_hex=0x0p+0 duty_hex=0x0p+0 limit=1500 reason=2
+tick_wrap CCR=120 integral=0.300000012 duty=0.0120000001 integral_hex=0x1.333334p-2 duty_hex=0x1.89374cp-7 limit=1500 reason=0
+PASS approved heater characterization; no thermal plant or hardware claim

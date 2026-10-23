@@ -3,11 +3,18 @@
 
 #include "main.h"
 
+void WS2812_ColorTask(void *argument);
 void WS2812_Init(void);
 HAL_StatusTypeDef WS2812_Ctrl(uint8_t red, uint8_t green, uint8_t blue);
-extern volatile uint32_t ws2812_tx_status;
-extern volatile uint32_t ws2812_spi_error;
-extern volatile uint32_t ws2812_error_count;
-extern volatile uint32_t ws2812_spi_sr;
 
+
+
+
+
+typedef struct
+{
+    uint32_t tx_status, spi_error, error_count, spi_sr;
+    uint32_t boot_status, frame_count, task_loop_count, task_started;
+} WS2812Stats_t;
+void WS2812_GetStats(WS2812Stats_t *stats);
 #endif /* WS2812_H */

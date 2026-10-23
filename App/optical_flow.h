@@ -4,7 +4,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #define OPTICAL_FLOW_FRAME_SIZE 27U
-typedef struct {
+typedef struct
+{
     uint32_t time_ms, distance;
     uint32_t received_tick, rx_count, age_ms;
     int16_t flow_vel_x, flow_vel_y;
@@ -14,7 +15,8 @@ typedef struct {
     uint8_t flow_quality, flow_status, checksum, has_sample;
     uint8_t raw[OPTICAL_FLOW_FRAME_SIZE];
 } OpticalFlowData_t;
-typedef struct {
+typedef struct
+{
     uint32_t byte_count, frame_count, checksum_errors, length_errors;
     uint32_t queue_overflows, uart_errors, restart_count, restart_failures;
     uint32_t last_uart_error, task_count;
@@ -25,9 +27,10 @@ typedef struct {
 } OpticalFlowStats_t;
 #define OPTICAL_FLOW_DIAG_TRACE_SIZE 512U
 #define OPTICAL_FLOW_RX_DMA 0U
-#define OPTICAL_FLOW_RX_IT  1U
+#define OPTICAL_FLOW_RX_IT 1U
 /* Watch-only diagnostics. Never used to decide whether a sample is accepted. */
-typedef struct {
+typedef struct
+{
     uint32_t version;
     uint32_t rx_event_count, rx_ignored_count, rx_empty_count;
     uint32_t rx_last_tick, rx_max_interval_ms;
@@ -57,9 +60,17 @@ typedef struct {
     uint32_t rx_mode_raw_nonzero_frame_count[2];
     uint32_t raw_decode_mismatch_count;
 } OpticalFlowDiag_t;
-extern volatile OpticalFlowData_t g_optical_flow_data;
-extern volatile OpticalFlowStats_t g_optical_flow_stats;
-extern volatile OpticalFlowDiag_t g_optical_flow_diag;
+/* Latest data is private; getters return a consistent value copy. */
+/* Registered compatibility area: generated task writes heap/stack fields. */
+typedef struct
+{
+    uint32_t heap_free_bytes, heap_min_free_bytes;
+    uint32_t optical_stack_free_words, default_stack_free_words, flight_stack_free_words;
+} OpticalFlowCompatibilityStats_t;
+extern volatile OpticalFlowCompatibilityStats_t g_optical_flow_stats;
+void OpticalFlow_RequestRxMode(uint32_t mode);
+void OpticalFlow_GetStats(OpticalFlowStats_t *stats);
+void OpticalFlow_GetDiagnostics(OpticalFlowDiag_t *diag);
 void OpticalFlow_Init(HAL_StatusTypeDef status);
 void OpticalFlow_SetTaskHandle(TaskHandle_t handle);
 HAL_StatusTypeDef OpticalFlow_Start(void);

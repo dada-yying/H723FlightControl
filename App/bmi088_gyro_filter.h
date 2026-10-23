@@ -10,7 +10,8 @@
 #define BMI088_GYRO_FILTER_RATE_WINDOWS 3U
 #define BMI088_GYRO_FILTER_RATE_TOLERANCE 0.02f
 
-typedef enum {
+typedef enum
+{
     BMI088_GYRO_FILTER_WAIT_SAMPLE = 0,
     BMI088_GYRO_FILTER_OK,
     BMI088_GYRO_FILTER_SOURCE_INVALID,
@@ -21,7 +22,8 @@ typedef enum {
     BMI088_GYRO_FILTER_NUMERICAL_ERROR
 } Bmi088GyroFilterError_t;
 
-typedef struct Bmi088GyroFilterState {
+typedef struct Bmi088GyroFilterState
+{
     float gyro_rad_s[3]; /* Calibrated + low-pass, native XYZ, rad/s. */
     float cutoff_hz, sample_hz, applied_sample_hz;
     float b0, b1, b2, a1, a2; /* Observer copies; Watch writes do not tune. */
@@ -31,13 +33,13 @@ typedef struct Bmi088GyroFilterState {
     uint8_t has_sample, initialized, valid, error;
 } Bmi088GyroFilterState_t;
 
-extern volatile Bmi088GyroFilterState_t g_bmi088_gyro_filter;
+void Bmi088GyroFilter_CopyWorking(Bmi088GyroFilterState_t *state); /* Acquisition owner only. */
 void Bmi088GyroFilter_Init(void);
 void Bmi088GyroFilter_Invalidate(void); /* Sole owner: Bmi088Task. */
 /* Calculate outside critical sections. Acquisition atomically publishes this
  * private result alongside the matching raw sample and attitude. */
 const Bmi088GyroFilterState_t *Bmi088GyroFilter_Compute(const Bmi088Data_t *sample,
-                                                     uint32_t completion_cycle);
+                                                        uint32_t completion_cycle);
 void Bmi088GyroFilter_GetState(Bmi088GyroFilterState_t *state);
 
 #endif

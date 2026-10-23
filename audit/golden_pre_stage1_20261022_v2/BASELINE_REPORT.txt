@@ -1,0 +1,39 @@
+Updated pre-stage-1 baseline - 2026-10-22
+Status: READY FOR USER REVIEW. Stage 1 has not started.
+
+Developer ruling:
+Heater KP=120, KI=15, MAX_CCR=1500 are intentional final baseline values.
+Legacy heater failure: stale expectations based on KP=100/KI=50/MAX_CCR=500; firmware parameters were manually changed by the developer.
+Legacy RC safety compile failure: registered existing failure, not waived as a passing test.
+Both original tests are preserved byte-for-byte. They remain visible in all results.
+
+Results:
+GCC 11.4.0 / Ubuntu 22.04 WSL x86_64, C11, -O2, no fast-math, FP contraction disabled.
+15 configurations: 13 PASS, 1 known assertion failure, 1 known compile failure.
+New heater and RC characterization: 0 compiler warnings, 0 compiler errors, PASS.
+Existing diagnostics remain: RC 33 errors / 1 warning; VOFA 1 array-size warning.
+AC5 firmware build from the preceding baseline: 64 sources, 0 warnings / 0 errors.
+No firmware/build inputs changed; AC5 was not redundantly rebuilt for host-only additions.
+
+Files added:
+tests/pid_tuning/test_heater_characterization.c: approved PI parameters, cadence, integral, upper/lower saturation, 1000-step anti-windup, stale guard, manual stop, overtemperature latch, SPI fault, tick wrap.
+tests/pid_tuning/test_rc_characterization.c: real decoder/ESC/control sequential safety paths, startup and arming sequence, lost frame hold, age 99/100 ms, recovery sequence, failsafe, switch lock, IMU timeout, tick wrap.
+Audit records and exact golden stdout are stored alongside this report.
+Original run.ps1 is unchanged; run_golden.py includes all test_*.c files and the extra blackbox configuration.
+
+Integrity:
+All files in the original pre-stage-1 SHA256 manifest are unchanged, including original tests, firmware, protected directories and project build settings.
+The first attempt's new heater fixture had a duplicate-main include error. Only the new test was corrected; first-attempt evidence is retained in attempt1/.
+
+Golden contract:
+The two .golden.txt files preserve actual output, including exact hexadecimal floating-point integral/duty representations. Compare new stdout to these immutable originals with identical compiler/options. Any difference requires review; never regenerate these files to accept a refactor silently.
+Existing passing tests retain their original assertion tolerances. Binary output hashes remain in wire_sha256.json.
+
+Limits:
+These tests characterize selected sequential paths, not all possible inputs, true ISR concurrency, target float execution, hardware timing, thermal response or flight safety.
+Legacy failures are documented exceptions approved by the user; the suite is not described as fully passing.
+
+Deferred until stage 1 approval:
+- Correct heater header comment from 5 percent to 15 percent without changing MAX_CCR.
+- Fix VOFA test array length warning without changing production packet behavior.
+- Execute the previously scoped stage 1 cleanup only after user confirmation.

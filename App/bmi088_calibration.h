@@ -13,13 +13,21 @@
 #define BMI088_CALIBRATION_REFERENCE_C 40.0f
 #define BMI088_CALIBRATION_MIN_C 22.625f
 #define BMI088_CALIBRATION_MAX_C 40.25f
-#define BMI088_CALIBRATION_GYRO_TEMP_RAD_S_C \
-    {-0.0002060266970f, 0.0001034203285f, -0.00004799084795f}
-#define BMI088_CALIBRATION_GYRO_BIAS_RAD_S \
-    {-0.002295192478f, 0.0002904073052f, -0.0006771495606f}
-#define BMI088_CALIBRATION_ACCEL_BIAS_M_S2 \
-    {-0.04141649145f, -0.002665104650f, 0.02095470497f}
-#define BMI088_CALIBRATION_ACCEL_SCALE \
-    {1.005745032f, 1.003663594f, 1.002671821f}
+#define BMI088_CALIBRATION_GYRO_TEMP_RAD_S_C                                                       \
+    {                                                                                              \
+        -0.0002060266970f, 0.0001034203285f, -0.00004799084795f                                    \
+    }
+#define BMI088_CALIBRATION_GYRO_BIAS_RAD_S                                                         \
+    {                                                                                              \
+        -0.002295192478f, 0.0002904073052f, -0.0006771495606f                                      \
+    }
+#define BMI088_CALIBRATION_ACCEL_BIAS_M_S2                                                         \
+    {                                                                                              \
+        -0.04141649145f, -0.002665104650f, 0.02095470497f                                          \
+    }
+#define BMI088_CALIBRATION_ACCEL_SCALE                                                             \
+    {                                                                                              \
+        1.005745032f, 1.003663594f, 1.002671821f                                                   \
+    }
 
 #endif

@@ -132,15 +132,15 @@ int main(void)
         reinit();dma_mode=j;i=aborts;
         if(j==4){
             assert(disk_read(0,b,10,1)==RES_OK);
-            assert(g_sd_spi_diag.dma_to_irq_max_cycles>=4800 && g_sd_spi_diag.dma_resume_max_cycles>=480000);
+            assert(s_sd_dma_to_irq_max>=4800 && g_sd_spi_diag.dma_resume_max_cycles>=480000);
             assert(g_sd_spi_diag.dma_resume_total_us>=1000);
             continue;
         }
         assert(disk_read(0,b,10,1)==RES_ERROR && aborts==i+1 && disk_state==STA_NOINIT);
         assert(g_sd_spi_diag.io_fault.kind==(j==1?SD_IO_FAULT_DMA_START:(j==2?SD_IO_FAULT_DMA_WAIT:SD_IO_FAULT_DMA_IRQ)));
-        before=g_sd_spi_diag.ignored_callback_count;
+        before=s_sd_ignored_callbacks;
         HAL_SPI_TxRxCpltCallback(&hspi1_sd);HAL_SPI_ErrorCallback(&hspi1_sd);
-        assert(g_sd_spi_diag.ignored_callback_count==before+2 && transport==TRANSPORT_IDLE);
+        assert(s_sd_ignored_callbacks==before+2 && transport==TRANSPORT_IDLE);
     }
     reinit();stuck=1;i=fake_tick;
     assert(disk_ioctl(0,CTRL_SYNC,0)==RES_ERROR && fake_tick-i>=500);

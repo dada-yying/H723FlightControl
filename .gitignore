@@ -14,3 +14,7 @@ MDK-ARM/**/*.o
 
 # Host test binaries, RAM-card fixtures and converter output
 tests/build/
+
+# Codex audit working directory (reports, per-batch binaries, golden builds, archives).
+# Large multi-GB evidence kept on disk; frozen golden baselines are force-added.
+audit/

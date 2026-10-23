@@ -43,7 +43,6 @@ void MX_SPI6_Init(void);
 
 /* USER CODE BEGIN Prototypes */
 HAL_StatusTypeDef MX_SPI2_Init(void); /* Optional logging sensor. */
-
 /* USER CODE END Prototypes */
 
 #ifdef __cplusplus

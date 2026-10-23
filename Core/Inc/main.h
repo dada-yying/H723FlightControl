@@ -63,7 +63,6 @@ void Error_Handler(void);
 #define POWER_5V_EN_GPIO_Port GPIOC
 #define BMI088_ACC_CS_Pin GPIO_PIN_0
 #define BMI088_GYRO_CS_Pin GPIO_PIN_3
- 
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

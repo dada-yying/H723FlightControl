@@ -246,7 +246,7 @@ int main(void)
       assert(test_spi_calls==calls && g_bmi088_stats.skipped_trigger_count==3);
       test_tick+=20;calls=test_spi_calls;Bmi088_OnSamplingTimeout();Bmi088_GetData(&data);
       assert(test_spi_calls==calls && !data.valid && g_bmi088_stats.sampling_timeout_count==1);
-      g_bmi088_stats.timer_irq_count=s_consumed_trigger=UINT32_MAX;
+      s_timer_irq_count=s_consumed_trigger=UINT32_MAX; s_timer_irq_base=0;
       event_process();assert(g_bmi088_stats.timer_irq_count==0 && g_bmi088_data.valid);
       test_tick+=2000;Bmi088_OnSamplingTimeout();test_tick+=1000;Bmi088_OnSamplingTimeout();
       assert(g_bmi088_stats.read_hz==0);

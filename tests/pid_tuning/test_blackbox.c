@@ -144,15 +144,33 @@ int main(int argc,char **argv){
         if(test_dma_calls!=before && test_dma_source[5]==SBB_DATA)calls++;
 }
     assert(calls==g_blackbox_tx_stats.effective_hz && s_test_elapsed_us==1000000U);
+    /* Exercise timeout publication without Run or an explicit publish afterward. */
+    reset();
+    g_flight_control_state.running = 1U;
+    g_flight_control_state.armed = 1U;
+    g_flight_control_state.imu_valid = 1U;
+    for (i = 0; i < 4; i++) g_flight_control_state.motor_command[i] = 0.25f;
+    FlightControl_PublishState();
+    test_tick += FLIGHT_IMU_TIMEOUT_MS;
+    FlightControl_OnTaskTimeout();
+    FlightControl_GetState(&flight);
+    assert(!flight.running && !flight.armed && !flight.imu_valid);
+    assert(flight.imu_timeout_count == 1U);
+    for (i = 0; i < 4; i++) assert(flight.motor_command[i] == 0.0f);
+    assert(flight.roll_rate_target_rad_s == 0.0f &&
+           flight.pitch_rate_target_rad_s == 0.0f && flight.yaw_rate_target_rad_s == 0.0f);
     /* Export real sender packets. No modifications to F407/converter between
        baseline and -DBLACKBOX_TEST_EXTRA_FIELDS build. */
     reset();if(argc>1){out=fopen(argv[1],"wb");assert(out);}wire_out=out;definition();
     for(i=0;i<3000;i++) {
         g_flight_control_state.roll_rad=.25f;
+        FlightControl_PublishState();
+        FlightControl_GetState(&flight);
+        assert(flight.roll_rad == 0.25f);
         timer_step();seed_bmi();Blackbox_ProcessPending();
     }
     wire_out=NULL;
-    assert(g_blackbox_tx_stats.data_completed_count==3000 && g_blackbox_tx_stats.schema_completed_count==0);
+    assert(g_blackbox_tx_stats.data_enqueued_count==3000 && g_blackbox_tx_stats.legacy_schema_enqueue_mirror_count==0);
     if(out)fclose(out);
     puts("PASS SBB3 fields/units, SD queue submission, independent 1kHz, unchanged VOFA, field extension");return 0;
 }

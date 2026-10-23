@@ -30,6 +30,7 @@ int main(void)
     const float request[4]={-0.2f,0.25f,0.75f,1.2f};
     const float clamped[4]={0,0.25f,0.75f,1};
     const float minimum[4]={0};
+    const float invalid_argument_rates[6]={0};
     unsigned i;
     uint32_t calls;
     assert(EscPwm_Init()==HAL_OK);
@@ -63,7 +64,7 @@ int main(void)
     assert(VOFA_SendAttitude(0,0,0)==HAL_OK);
     assert(g_vofa_tx_stats.success_count==2 && g_vofa_tx_stats.max_duration_ms==11);
     calls=test_uart_calls;
-    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,minimum,0,0,0,NULL)==HAL_ERROR);
+    assert(VOFA_SendFlightTelemetry(0,0,0,0,0,0,0,invalid_argument_rates,0,0,0,NULL)==HAL_ERROR);
     assert(test_uart_calls==calls); /* Invalid arguments never reach UART. */
     puts("PASS: UART success/timeout/busy/error accounting, no retry, maximum duration and tick rollover");
     return 0;

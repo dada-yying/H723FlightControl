@@ -23,8 +23,8 @@ static void init_notch_test(void)
     RcSbus_Init(); FlightControl_Init(); test_armed=0;
     /* The double reference below uses explicit test parameters. Production
      * Q/R are user tuning values and may legitimately differ from .015/1. */
-    g_flight_control_filter.q=.015f; g_flight_control_filter.r=1;
-    g_flight_control_filter.yaw_q=.015f; g_flight_control_filter.yaw_r=1;
+    g_flight_control_config_staging.config.q=.015f; g_flight_control_config_staging.config.r=1;
+    g_flight_control_config_staging.config.yaw_q=.015f; g_flight_control_config_staging.config.yaw_r=1;
     memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
 }
 
@@ -72,7 +72,7 @@ static void test_frequency_response(void)
             float input=(float)sin(2*TEST_PI*freq*n/fs);
             test_imu.gyro_y=-input; test_imu.gyro_x=2.0f;
             test_imu.gyro_rx_count++;
-            FlightControl_FilterGyro(&test_imu,1/fs);
+            test_submit_and_filter(&test_imu,1/fs);
             if(n>=2000) { in_power+=input*input; out_power+=s_notch_history[0].y1*s_notch_history[0].y1; }
             near_value(s_filtered_rate[1],2); near_value(s_filtered_rate[2],0);
         }
@@ -93,11 +93,11 @@ static void test_notch_lifecycle(void)
     memcpy(held,s_notch_history,sizeof(held)); count=g_flight_control_notch.sample_count;
     FlightControl_ResetController();
     assert(memcmp(held,s_notch_history,sizeof(held))==0);
-    test_imu.gyro_y=99; FlightControl_Run();
+    test_imu.gyro_y=99; test_submit_and_run();
     assert(memcmp(held,s_notch_history,sizeof(held))==0);
     assert(g_flight_control_notch.sample_count==count);
     test_tick+=11; FlightControl_OnTaskTimeout();
-    FlightControl_Run(); assert(!s_filter_initialized);
+    test_submit_and_run(); assert(!s_filter_initialized);
     test_imu.gyro_y=-4; test_imu.gyro_x=-2; run();
     near_value(s_filtered_rate[0],4); near_value(s_filtered_rate[1],-2);
     near_value(s_notch_history[0].x1,4); near_value(s_notch_history[0].y2,4);
@@ -107,26 +107,26 @@ static void test_notch_lifecycle(void)
     /* Averaged fresh-sample interval includes duplicate calls, not iterations. */
     init_notch_test(); run();
     for(n=0;n<128;n++) {
-        FlightControl_FilterGyro(&test_imu,0.001f);
+        test_submit_and_filter(&test_imu,0.001f);
         test_imu.gyro_rx_count++;
-        FlightControl_FilterGyro(&test_imu,0.001f);
+        test_submit_and_filter(&test_imu,0.001f);
     }
     assert(g_flight_control_notch.sample_count==129);
     assert(fabs(g_flight_control_notch.sample_hz-500)<0.02);
     /* Sustained undersampling uses Kalman alone and restores notch on recovery. */
-    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; FlightControl_FilterGyro(&test_imu,.005f); }
+    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; test_submit_and_filter(&test_imu,.005f); }
     assert(!g_flight_control_notch.active && g_flight_control_notch.rate_fault_count==1);
-    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; FlightControl_FilterGyro(&test_imu,.001f); }
+    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; test_submit_and_filter(&test_imu,.001f); }
     assert(g_flight_control_notch.active);
     /* Alternating scheduler jitter does not modulate coefficients. */
     init_notch_test(); run(); count=g_flight_control_notch.coefficient_update_count;
     for(n=0;n<1024;n++) {
         test_imu.gyro_rx_count++;
-        FlightControl_FilterGyro(&test_imu,n%2 ? .0011f : .0009f);
+        test_submit_and_filter(&test_imu,n%2 ? .0011f : .0009f);
     }
     assert(g_flight_control_notch.coefficient_update_count==count);
-    test_imu.gyro_rx_count=0xffffffffU; FlightControl_FilterGyro(&test_imu,.001f);
-    test_imu.gyro_rx_count=0U; FlightControl_FilterGyro(&test_imu,.001f);
+    test_imu.gyro_rx_count=0xffffffffU; test_submit_and_filter(&test_imu,.001f);
+    test_imu.gyro_rx_count=0U; test_submit_and_filter(&test_imu,.001f);
     assert(s_filter_rx_count==0U);
     puts("PASS: duplicate samples, PID resets, timeout/invalid recovery, averaged cadence, low-rate fallback, jitter and count wrap");
 }
@@ -145,16 +145,16 @@ static void test_yaw_parameter_isolation(void)
             test_imu.gyro_x=(float)cos(n*.17);
             test_imu.gyro_y=(float)sin(n*.19);
             test_imu.gyro_z=(float)cos(n*.23);
-            if(n==40 && pass==1) { g_flight_control_filter.q=.2f; g_flight_control_filter.r=.7f; }
-            if(n==40 && pass==2) { g_flight_control_filter.yaw_q=.003f; g_flight_control_filter.yaw_r=1.7f; }
-            q=g_flight_control_filter.yaw_q; r=g_flight_control_filter.yaw_r;
+            if(n==40 && pass==1) { g_flight_control_config_staging.config.q=.2f; g_flight_control_config_staging.config.r=.7f; }
+            if(n==40 && pass==2) { g_flight_control_config_staging.config.yaw_q=.003f; g_flight_control_config_staging.config.yaw_r=1.7f; }
+            q=g_flight_control_config_staging.config.yaw_q; r=g_flight_control_config_staging.config.yaw_r;
             q_step=q*dt/.001;
             if(n==0) {
                 yaw_x=-test_imu.gyro_z;
                 yaw_p=(sqrt(q_step*q_step+4*q_step*r)-q_step)/2;
             } else reference_kalman(&yaw_x,&yaw_p,-test_imu.gyro_z,q,r,dt);
             test_imu.gyro_rx_count++;
-            FlightControl_FilterGyro(&test_imu,dt);
+            test_submit_and_filter(&test_imu,dt);
             assert(fabs(s_filtered_rate[2]-yaw_x)<.00001);
             assert(fabs(s_filter_covariance[2]-yaw_p)<.00001);
             for(axis=0;axis<3;axis++) {
@@ -176,30 +176,30 @@ static void test_yaw_parameter_isolation(void)
         for(n=0;n<sizeof(invalid)/sizeof(invalid[0]);n++) {
             for(axis=0;axis<2;axis++) {
                 float held_q=s_filter_yaw_q,held_r=s_filter_yaw_r;
-                g_flight_control_filter.yaw_q=axis==0 ? invalid[n] : .4f;
-                g_flight_control_filter.yaw_r=axis==1 ? invalid[n] : 2;
-                g_flight_control_filter.q=.03f+n*.001f;
-                g_flight_control_filter.r=.8f;
+                g_flight_control_config_staging.config.yaw_q=axis==0 ? invalid[n] : .4f;
+                g_flight_control_config_staging.config.yaw_r=axis==1 ? invalid[n] : 2;
+                g_flight_control_config_staging.config.q=.03f+n*.001f;
+                g_flight_control_config_staging.config.r=.8f;
                 run();
-                near_value(g_flight_control_filter.applied_q,g_flight_control_filter.q);
+                near_value(g_flight_control_filter.applied_q,g_flight_control_config_staging.config.q);
                 near_value(g_flight_control_filter.applied_yaw_q,held_q);
                 near_value(g_flight_control_filter.applied_yaw_r,held_r);
-                g_flight_control_filter.q=axis==0 ? invalid[n] : .2f;
-                g_flight_control_filter.r=axis==1 ? invalid[n] : .9f;
-                g_flight_control_filter.yaw_q=.01f+n*.001f;
-                g_flight_control_filter.yaw_r=1.2f;
+                g_flight_control_config_staging.config.q=axis==0 ? invalid[n] : .2f;
+                g_flight_control_config_staging.config.r=axis==1 ? invalid[n] : .9f;
+                g_flight_control_config_staging.config.yaw_q=.01f+n*.001f;
+                g_flight_control_config_staging.config.yaw_r=1.2f;
                 run();
                 near_value(g_flight_control_filter.applied_q,.03f+n*.001f);
                 near_value(g_flight_control_filter.applied_r,.8f);
-                near_value(g_flight_control_filter.applied_yaw_q,g_flight_control_filter.yaw_q);
+                near_value(g_flight_control_filter.applied_yaw_q,g_flight_control_config_staging.config.yaw_q);
                 near_value(g_flight_control_filter.applied_yaw_r,1.2f);
             }
         }
     }
-    g_flight_control_filter.yaw_q=.08f; g_flight_control_filter.yaw_r=.6f;
+    g_flight_control_config_staging.config.yaw_q=.08f; g_flight_control_config_staging.config.yaw_r=.6f;
     {
         float held_q=s_filter_yaw_q,p=s_filter_covariance[2],x=s_filtered_rate[2];
-        FlightControl_FilterGyro(&test_imu,.001f); /* no fresh sample */
+        test_submit_and_filter(&test_imu,.001f); /* no fresh sample */
         near_value(s_filter_yaw_q,held_q); near_value(s_filter_covariance[2],p);
         near_value(s_filtered_rate[2],x);
     }
@@ -213,8 +213,8 @@ static void test_yaw_parameter_isolation(void)
     near_value(s_filtered_rate[2],-3);
     near_value(g_flight_control_filter.applied_yaw_r,.6f);
     FlightControl_Init();
-    near_value(g_flight_control_filter.yaw_q,.015f);
-    near_value(g_flight_control_filter.yaw_r,1);
+    near_value(g_flight_control_config_staging.config.yaw_q,.015f);
+    near_value(g_flight_control_config_staging.config.yaw_r,1);
     puts("PASS: independent RP/Yaw Q/R, exact unaffected-axis histories, variable-dt reference, invalid pairs, fresh gating and recovery");
 }
 

@@ -6,7 +6,6 @@
 #include "ws2812.h"
 #include "flight_control.h"
 
-
 void App_Main_Init(void)
 {
     WS2812_Init();
@@ -14,8 +13,4 @@ void App_Main_Init(void)
     AtomImu_Init();
     RcSbus_Init();
     FlightControl_Init();
-}
-
-void App_Main_Start(void)
-{
 }

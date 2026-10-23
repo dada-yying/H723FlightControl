@@ -4,7 +4,8 @@
 #include "bmi088.h"
 #include "bmi088_gyro_filter.h"
 
-typedef enum {
+typedef enum
+{
     BMI088_ATTITUDE_WAIT_SOURCE = 0,
     BMI088_ATTITUDE_ALIGNING,
     BMI088_ATTITUDE_OK,
@@ -15,7 +16,8 @@ typedef enum {
     BMI088_ATTITUDE_NUMERICAL_ERROR
 } Bmi088AttitudeError_t;
 
-typedef struct Bmi088AttitudeState {
+typedef struct Bmi088AttitudeState
+{
     /* Aircraft display convention: right side down / nose down / right turn
      * are positive. Yaw is relative, NOT a magnetically referenced heading. */
     float roll_rad, pitch_rad, yaw_rad;
@@ -26,16 +28,16 @@ typedef struct Bmi088AttitudeState {
     uint8_t initialized, valid, accel_used, error;
 } Bmi088AttitudeState_t;
 
-extern volatile Bmi088AttitudeState_t g_bmi088_attitude_state;
+void Bmi088Attitude_CopyWorking(Bmi088AttitudeState_t *state); /* Acquisition owner only. */
 
-void Bmi088Attitude_Init(void); /* Called by BMI acquisition init. */
+void Bmi088Attitude_Init(void);       /* Called by BMI acquisition init. */
 void Bmi088Attitude_Invalidate(void); /* Sole owner: Bmi088Task. */
 /* Compute outside critical sections, once per complete calibrated sample.
  * Caller atomically publishes returned state AND its matching BMI sample.
  * Returned pointer is private workspace, only the BMI acquisition owner uses it. */
 const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
-                                                  const Bmi088GyroFilterState_t *filter,
-                                                  uint32_t completion_cycle);
+                                                    const Bmi088GyroFilterState_t *filter,
+                                                    uint32_t completion_cycle);
 void Bmi088Attitude_GetState(Bmi088AttitudeState_t *state);
 
 #endif

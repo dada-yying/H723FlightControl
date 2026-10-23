@@ -92,8 +92,8 @@ static void validate_file(void)
             if(b[pos+21]==SBB_DATA){assert(len==packet_size);assert(!memcmp(b+pos+40,packet+24,len-28));data++;}
             pos+=(16+len+3)&~3U;}
     }
-    f_close(&f);printf("validate file %u data %u total %u blocks %u\n",g_blackbox_stats.file_number,data,g_blackbox_stats.data_written,blocks);
-    assert(g_blackbox_stats.file_number>1 || data==g_blackbox_stats.data_written);
+    f_close(&f);printf("validate file %u data %u total %u blocks %u\n",s_storage_stats.file_number,data,s_storage_stats.data_written,blocks);
+    assert(s_storage_stats.file_number>1 || data==s_storage_stats.data_written);
 }
 static void export_log(const char *path)
 {
@@ -110,28 +110,28 @@ int main(int argc,char **argv)
     if(BB_FILE_BYTES>BB_INITIAL_COMMIT_BYTES){
         unsigned limit=5000;
         format_ram(0);f_mount(NULL,"0:",0);test_tick=100;BlackboxStorage_Init();
-        while(!g_blackbox_stats.ready_tick_ms && limit--)pump(1);
+        while(!s_storage_stats.ready_tick_ms && limit--)pump(1);
         assert(limit && allocated>=BB_INITIAL_COMMIT_BYTES && allocated<BB_FILE_BYTES);
         for(i=0;i<150;i++)capture();pump(1);
-        assert(g_blackbox_stats.data_written>0 && allocated<BB_FILE_BYTES);
+        assert(s_storage_stats.data_written>0 && allocated<BB_FILE_BYTES);
         puts("PASS logging starts with committed 4MiB while 40MiB reservation remains in background");
         free(media);return 0;
     }
     format_ram(0);boot();
     for(i=0;i<2000;i++){capture();pump(1);}pump(500);
-    assert(g_blackbox_stats.data_written==2000 && g_blackbox_stats.file_number==1);validate_file();export_log(argv[2]);
+    assert(s_storage_stats.data_written==2000 && s_storage_stats.file_number==1);validate_file();export_log(argv[2]);
     /* Complete or partial failed batch: retry same file without duplicate samples. */
     for(i=1;i<=2;i++){
-        format_ram(0);boot();before=g_blackbox_stats.data_written;file_no=g_blackbox_stats.file_number;
+        format_ram(0);boot();before=s_storage_stats.data_written;file_no=s_storage_stats.file_number;
         for(unsigned j=0;j<150;j++)capture();partial_fault=i;pump(5000);
-        assert(g_blackbox_stats.file_number==file_no && g_blackbox_stats.recovery_count && g_blackbox_stats.data_written==before+150);validate_file();
+        assert(s_storage_stats.file_number==file_no && s_storage_stats.recovery_count && s_storage_stats.data_written==before+150);validate_file();
     }
     format_ram(0);boot();for(i=0;i<200;i++){capture();pump(1);}sync_fail=1;pump(5000);
-    assert(g_blackbox_stats.file_number==1 && g_blackbox_stats.recovery_count);validate_file();
+    assert(s_storage_stats.file_number==1 && s_storage_stats.recovery_count);validate_file();
     /* Every queued old packet retained when producer overruns stalled SD. */
     format_ram(0);boot();disk_fail=1;for(i=0;i<2000;i++){capture();pump(1);}
     assert(stream.stats.dropped>0 && stream.stats.high_water<=BB_QUEUE_BYTES);
-    disk_fail=0;pump(6000);assert(g_blackbox_stats.file_number==1);validate_file();
+    disk_fail=0;pump(6000);assert(s_storage_stats.file_number==1);validate_file();
     {unsigned missing=stream.stats.dropped;
      uint32_t old_sequence=next_record_sequence;
      capture();pump(500);
@@ -139,20 +139,20 @@ int main(int argc,char **argv)
      validate_file();}
     /* Good reads prove descriptor corruption before a new file is permitted. */
     for(i=DATA_START;i<SECTORS;i++)if(!memcmp(media+i*512,"SKYBBX3",8) && sbb_u32(media+i*512+28)==0){media[i*512+60]^=1;break;}
-    assert(i<SECTORS);fault(BB_ERROR_WRITE,FR_DISK_ERR);pump(15000);assert(g_blackbox_stats.file_number==2);
+    assert(i<SECTORS);fault(BB_ERROR_WRITE,FR_DISK_ERR);pump(15000);assert(s_storage_stats.file_number==2);
     capture();pump(500);assert(schema_offset==definition_size);validate_file();
     /* Card full is terminal for this power session. */
     format_ram(1);f_mount(NULL,"0:",0);BlackboxStorage_Init();pump(1000);
-    assert(g_blackbox_stats.stopped && g_blackbox_stats.state==BLACKBOX_SPACE_WAIT);
+    assert(s_storage_stats.stopped && s_storage_stats.state==BLACKBOX_SPACE_WAIT);
     /* Transient initialisation failure does not become fatal. */
     format_ram(0);f_mount(NULL,"0:",0);BlackboxStorage_Init();init_fail=2;pump(10000);
-    assert(g_blackbox_stats.file_number==1 && !g_blackbox_stats.stopped && schema_offset==definition_size);
+    assert(s_storage_stats.file_number==1 && !s_storage_stats.stopped && schema_offset==definition_size);
     for(i=1;i<=2;i++){
         format_ram(0);f_mount(NULL,"0:",0);BlackboxStorage_Init();create_fail=i;pump(10000);
-        assert(g_blackbox_stats.file_number==1 && schema_offset==definition_size && g_blackbox_stats.recovery_count);
+        assert(s_storage_stats.file_number==1 && schema_offset==definition_size && s_storage_stats.recovery_count);
     }
     write_offset=BB_MAX_FILE_BYTES;BlackboxStorage_Process();
-    assert(g_blackbox_stats.stopped && g_blackbox_stats.file_number==1);
+    assert(s_storage_stats.stopped && s_storage_stats.file_number==1);
     accepting=1; /* Isolate the ring test from the deliberately stopped logger. */
     /* Single-producer ring, physical and uint32 counter wrap. */
     BB_StreamInit(&stream);stream.head=stream.tail=UINT32_MAX-100;
@@ -173,3 +173,11 @@ int main(int argc,char **argv)
     free(media);
     puts("PASS H723 actual FatFs: packet preservation, CRC, queue wrap/full, partial/complete writes, sync failure, same-file recovery, corrupt-file switch, card full, init retry");return 0;
 }
+
+uint32_t Blackbox_SchemaId(void) { return g_blackbox_tx_stats.schema_id; }
+uint32_t BB_DiskError(void) { return g_bb_disk_error; }
+uint32_t BB_DiskMaxMs(void) { return g_bb_disk_max_ms; }
+uint32_t BB_DiskInitFailed(void) { return g_bb_disk_init_failed; }
+uint32_t BB_DiskDmaMaxMs(void) { return g_bb_disk_dma_max_ms; }
+uint32_t BB_DiskBusyMaxMs(void) { return g_bb_disk_busy_max_ms; }
+uint32_t BB_DiskInitMaxMs(void) { return g_bb_disk_init_max_ms; }

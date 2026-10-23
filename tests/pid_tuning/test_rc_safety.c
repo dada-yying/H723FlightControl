@@ -57,6 +57,7 @@ static void control_at(uint32_t tick)
     test_tick=tick;
     test_dwt.CYCCNT+=480000;
     test_imu.gyro_rx_count++;
+    g_flight_control_config_staging.commit_sequence++;
     FlightControl_Run();
     assert(test_critical_depth == 0);
 }
@@ -80,8 +81,8 @@ static uint32_t arm_and_run(uint32_t start)
     assert(EscPwm_IsArmed());
     frame_at(start+2002,1696,1022,1696,352,0); control_at(test_tick);
     assert(g_rc_sbus_data.tuning_axis_valid);
-    g_flight_control_pid.rate_roll.kp=0.1f;
-    g_flight_control_pid.rate_roll.ki=0.1f;
+    g_flight_control_config_staging.config.pid.rate_roll.kp=0.1f;
+    g_flight_control_config_staging.config.pid.rate_roll.ki=0.1f;
     s_roll_integral=0.1f;
     control_at(test_tick);
     assert(g_esc_pwm_state.pulse_us[0] > 1000);
@@ -304,7 +305,7 @@ static void test_tuning_hold(void)
 {
     uint32_t last=arm_and_run(0);
     frame_at(last+1,1000,348,1696,1024,0); control_at(test_tick);
-    g_flight_control_tuning.pid_debug=1; control_at(test_tick);
+    g_flight_control_config_staging.config.pid_debug=1; control_at(test_tick);
     frame_at(test_tick+1,1696,348,1696,352,0); control_at(test_tick);
     assert(EscPwm_IsArmed() && g_flight_control_tuning.waiting_center);
     frame_at(test_tick+1,352,348,352,1024,RC_SBUS_FLAG_FAILSAFE); control_at(test_tick);

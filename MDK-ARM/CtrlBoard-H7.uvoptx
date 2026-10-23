@@ -338,32 +338,17 @@
         <Ww>
           <count>36</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.io_fault.complete</ItemText>
+          <ItemText>g_bmi088_stats.read_hz</ItemText>
         </Ww>
         <Ww>
           <count>37</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.state</ItemText>
+          <ItemText>g_bmi088_stats.read_error_count</ItemText>
         </Ww>
         <Ww>
           <count>38</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.data_written</ItemText>
-        </Ww>
-        <Ww>
-          <count>39</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.queue_used</ItemText>
-        </Ww>
-        <Ww>
-          <count>40</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.dma_to_irq_max_cycles</ItemText>
-        </Ww>
-        <Ww>
-          <count>41</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.dma_resume_max_cycles</ItemText>
+          <ItemText>g_bmi088_spi2_poll_diag.first_fault.complete</ItemText>
         </Ww>
       </WatchWindow1>
       <MemoryWindow1>

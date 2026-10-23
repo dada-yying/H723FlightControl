@@ -131,19 +131,19 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+/* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* add semaphores, ... */
+/* add semaphores, ... */
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
-  /* start timers, add new ones, ... */
+/* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
   /* USER CODE BEGIN RTOS_QUEUES */
-  /* add queues, ... */
+/* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
@@ -163,29 +163,30 @@ void MX_FREERTOS_Init(void) {
   if (blackboxTaskHandle == NULL) Blackbox_OnTaskCreationFailure();
 
   /* USER CODE BEGIN RTOS_THREADS */
-  if (defaultTaskHandle == NULL)
-  {
+if (defaultTaskHandle == NULL)
+{
     Error_Handler();
-  }
-  if (ws2812TaskHandle == NULL)
-  {
+}
+if (ws2812TaskHandle == NULL)
+{
     Error_Handler();
-  }
+}
 
-  if (rcTaskHandle == NULL)
-  {
+if (rcTaskHandle == NULL)
+{
     Error_Handler();
-  }
-  if (flightControlTaskHandle == NULL)
-  {
+}
+if (flightControlTaskHandle == NULL)
+{
     Error_Handler();
-  }
-  RcSbus_SetTaskHandle((TaskHandle_t)rcTaskHandle);
-  FlightControl_SetTaskHandle((TaskHandle_t)flightControlTaskHandle);
+}
+EscPwm_SetRcTaskHandle((TaskHandle_t)rcTaskHandle);
+RcSbus_SetTaskHandle((TaskHandle_t)rcTaskHandle);
+FlightControl_SetTaskHandle((TaskHandle_t)flightControlTaskHandle);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
-  /* add events, ... */
+/* add events, ... */
   /* USER CODE END RTOS_EVENTS */
 
 }
@@ -200,17 +201,17 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-  RcSbusData_t rc_data;
-  FlightControlState_t flight_data;
-  EscPwmState_t esc_data;
-  OpticalFlowData_t optical_data;
-  uint8_t frame[VOFA_FLIGHT_FRAME_SIZE];
-  TickType_t last_wake_time = xTaskGetTickCount();
-  const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
+RcSbusData_t rc_data;
+FlightControlState_t flight_data;
+EscPwmState_t esc_data;
+OpticalFlowData_t optical_data;
+uint8_t frame[VOFA_FLIGHT_FRAME_SIZE];
+TickType_t last_wake_time = xTaskGetTickCount();
+const TickType_t vofa_period_ticks = pdMS_TO_TICKS(10U);
 
-  (void)argument;
-  for (;;)
-  {
+(void)argument;
+for (;;)
+{
     Bmi088Heater_CheckTimeout();
     FDCAN3_UpdateDiagnostics();
     RcSbus_GetData(&rc_data);
@@ -220,7 +221,7 @@ void StartDefaultTask(void *argument)
     VOFA_BuildFlightFrame(frame, &flight_data, &rc_data, &esc_data, &optical_data);
     (void)VOFA_SendFrame(frame);
     vTaskDelayUntil(&last_wake_time, vofa_period_ticks);
-  }
+}
   /* USER CODE END StartDefaultTask */
 }
 
@@ -234,17 +235,17 @@ void StartDefaultTask(void *argument)
 void StartRcTask(void *argument)
 {
   /* USER CODE BEGIN StartRcTask */
-  RcSbusData_t rc_data;
+RcSbusData_t rc_data;
 
-  (void)argument;
-  for (;;)
-  {
+(void)argument;
+for (;;)
+{
     (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
     RcSbus_ProcessPending();
     RcSbus_CheckTimeout();
     RcSbus_GetData(&rc_data);
     EscPwm_UpdateFromRc(&rc_data);
-  }
+}
   /* USER CODE END StartRcTask */
 }
 
@@ -296,32 +297,33 @@ void StartOpticalFlowTask(void *argument)
 /* USER CODE BEGIN Application */
 void StartBlackboxTask(void *argument)
 {
-  (void)argument;
-  (void)Blackbox_StartRecording(xTaskGetCurrentTaskHandle());
-  for (;;)
-  {
-    /* 1 kHz capture; storage runs independently below sensor/control priorities. */
-    (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
-    Blackbox_ProcessPending();
-    g_blackbox_tx_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
-  }
+    (void)argument;
+    (void)Blackbox_StartRecording(xTaskGetCurrentTaskHandle());
+    for (;;)
+    {
+        /* 1 kHz capture; storage runs independently below sensor/control priorities. */
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U));
+        Blackbox_ProcessPending();
+        Blackbox_RecordStackWatermark(uxTaskGetStackHighWaterMark(NULL));
+    }
 }
 
 void StartBmi088Task(void *argument)
 {
-  (void)argument;
-  (void)Bmi088_StartSampling(xTaskGetCurrentTaskHandle());
-  for (;;)
-  {
-    /* TIM7 posts 500 us events. Coalesce late events rather than replay reads;
+    (void)argument;
+    (void)Bmi088_StartSampling(xTaskGetCurrentTaskHandle());
+    for (;;)
+    {
+        /* TIM7 posts 500 us events. Coalesce late events rather than replay reads;
      * timeout wakes only maintain freshness/heater safety, never fake samples. */
-    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U)) != 0U) Bmi088_Process();
-    else Bmi088_OnSamplingTimeout();
-    Bmi088Heater_Process();
-    g_bmi088_stats.stack_free_words = uxTaskGetStackHighWaterMark(NULL);
-  }
+        if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10U)) != 0U)
+            Bmi088_Process();
+        else
+            Bmi088_OnSamplingTimeout();
+        Bmi088Heater_Process();
+        Bmi088_RecordStackWatermark(uxTaskGetStackHighWaterMark(NULL));
+    }
 }
-
 /* USER CODE END Application */
 
 void StartBlackboxStorageTask(void *argument)

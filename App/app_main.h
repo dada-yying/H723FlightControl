@@ -3,15 +3,15 @@
 
 /*
  * Application entry points for the template.
- * Add board drivers, modules, and FreeRTOS task creation from App_Main_Start().
+ * Initialize application modules before starting the scheduler.
  */
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-void App_Main_Init(void);
-void App_Main_Start(void);
+    void App_Main_Init(void);
 
 #ifdef __cplusplus
 }

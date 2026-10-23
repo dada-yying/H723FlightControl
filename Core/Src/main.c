@@ -25,6 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "../../BSP/bsp_dwt.h"
 #include "app_main.h"
 #include "esc_pwm.h"
 #include "fdcan.h"
@@ -64,16 +65,15 @@ void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN 0 */
 static void Error_Delay(uint32_t ms)
 {
-    // 确保 DWT 计数器已使能
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    
+    // Ensure the DWT cycle counter is enabled.
+    BspDwt_Enable();
+
     uint32_t cycles_per_ms = SystemCoreClock / 1000U;
-    uint32_t start = DWT->CYCCNT;
-    
-    while ((DWT->CYCCNT - start) < (ms * cycles_per_ms))
+    uint32_t start = BspDwt_Cycles();
+
+    while ((BspDwt_Cycles() - start) < (ms * cycles_per_ms))
     {
-        // 空循环等待，不依赖任何中断
+        // Busy wait without relying on interrupts.
     }
 }
 /* USER CODE END 0 */
@@ -86,11 +86,11 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  /* FreeRTOS obtains the initial MSP through this image's vector table. */
-  extern uint32_t __Vectors;
-  SCB->VTOR = (uint32_t)&__Vectors;
-  __DSB();
-  __ISB();
+/* FreeRTOS obtains the initial MSP through this image's vector table. */
+extern uint32_t __Vectors;
+SCB->VTOR = (uint32_t)&__Vectors;
+__DSB();
+__ISB();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -118,19 +118,19 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  App_Main_Init();
-  if (EscPwm_Init() != HAL_OK)
-  {
+App_Main_Init();
+if (EscPwm_Init() != HAL_OK)
+{
     Error_Handler();
-  }
-  if (FDCAN3_StartAtomImuReception() != HAL_OK)
-  {
+}
+if (FDCAN3_StartAtomImuReception() != HAL_OK)
+{
     Error_Handler();
-  }
-  if (RcSbus_StartReception() != HAL_OK)
-  {
+}
+if (RcSbus_StartReception() != HAL_OK)
+{
     Error_Handler();
-  }
+}
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -150,12 +150,12 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-    while (1)
-    {
+while (1)
+{
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    }
+}
   /* USER CODE END 3 */
 }
 
@@ -228,16 +228,16 @@ void SystemClock_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-    /* User can add his own implementation to report the HAL error return state */
-    __disable_irq();
-    TIM3_HeaterEmergencyOff();
-    while (1)
-    {
-      WS2812_Ctrl(0U, 255U, 0U);
-      Error_Delay(100U);   // 亮 100ms
-      WS2812_Ctrl(0U, 0U, 0U);
-      Error_Delay(100U);   // 灭 100ms
-    }
+/* User can add his own implementation to report the HAL error return state */
+__disable_irq();
+TIM3_HeaterEmergencyOff();
+while (1)
+{
+    WS2812_Ctrl(0U, 255U, 0U);
+    Error_Delay(100U); // On for 100 ms.
+    WS2812_Ctrl(0U, 0U, 0U);
+    Error_Delay(100U); // Off for 100 ms.
+}
   /* USER CODE END Error_Handler_Debug */
 }
 #ifdef USE_FULL_ASSERT
@@ -251,7 +251,7 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-    /* User can add his own implementation to report the file name and line number,
+/* User can add his own implementation to report the file name and line number,
        ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }

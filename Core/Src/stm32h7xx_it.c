@@ -55,17 +55,16 @@
  * Do not dereference the fault stack here: it may itself be invalid. */
 volatile struct
 {
-  uint32_t exception_number;
-  uint32_t cfsr;
-  uint32_t hfsr;
-  uint32_t abfsr;
-  uint32_t bfar;
-  uint32_t mmfar;
-  uint32_t ccr;
-  uint32_t psp;
-  uint32_t handler_msp;
+    uint32_t exception_number;
+    uint32_t cfsr;
+    uint32_t hfsr;
+    uint32_t abfsr;
+    uint32_t bfar;
+    uint32_t mmfar;
+    uint32_t ccr;
+    uint32_t psp;
+    uint32_t handler_msp;
 } g_fault_snapshot;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,23 +77,22 @@ volatile struct
 
 static void Fault_SaveSnapshot(void)
 {
-  /* Fault context must not call FreeRTOS, SPI/UART, or HAL timeout loops. */
-  __disable_irq();
-  TIM3_HeaterEmergencyOff();
-  if (g_fault_snapshot.exception_number == 0U)
-  {
-    g_fault_snapshot.cfsr = SCB->CFSR;
-    g_fault_snapshot.hfsr = SCB->HFSR;
-    g_fault_snapshot.abfsr = SCB->ABFSR;
-    g_fault_snapshot.bfar = SCB->BFAR;
-    g_fault_snapshot.mmfar = SCB->MMFAR;
-    g_fault_snapshot.ccr = SCB->CCR;
-    g_fault_snapshot.psp = __get_PSP();
-    g_fault_snapshot.handler_msp = __get_MSP();
-    g_fault_snapshot.exception_number = __get_IPSR();
-  }
+    /* Fault context must not call FreeRTOS, SPI/UART, or HAL timeout loops. */
+    __disable_irq();
+    TIM3_HeaterEmergencyOff();
+    if (g_fault_snapshot.exception_number == 0U)
+    {
+        g_fault_snapshot.cfsr = SCB->CFSR;
+        g_fault_snapshot.hfsr = SCB->HFSR;
+        g_fault_snapshot.abfsr = SCB->ABFSR;
+        g_fault_snapshot.bfar = SCB->BFAR;
+        g_fault_snapshot.mmfar = SCB->MMFAR;
+        g_fault_snapshot.ccr = SCB->CCR;
+        g_fault_snapshot.psp = __get_PSP();
+        g_fault_snapshot.handler_msp = __get_MSP();
+        g_fault_snapshot.exception_number = __get_IPSR();
+    }
 }
-
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -112,13 +110,12 @@ static void Fault_SaveSnapshot(void)
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-  TIM3_HeaterEmergencyOff();
-
+TIM3_HeaterEmergencyOff();
   /* USER CODE END NonMaskableInt_IRQn 0 */
   /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-  while (1)
-  {
-  }
+while (1)
+{
+}
   /* USER CODE END NonMaskableInt_IRQn 1 */
 }
 
@@ -128,8 +125,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-  Fault_SaveSnapshot();
-
+Fault_SaveSnapshot();
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -144,8 +140,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  TIM3_HeaterEmergencyOff();
-
+TIM3_HeaterEmergencyOff();
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -160,7 +155,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-  Fault_SaveSnapshot();
+Fault_SaveSnapshot();
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -175,8 +170,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-  TIM3_HeaterEmergencyOff();
-
+TIM3_HeaterEmergencyOff();
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -207,11 +201,11 @@ void SysTick_Handler(void)
 
   /* USER CODE END SysTick_IRQn 0 */
   /* USER CODE BEGIN SysTick_IRQn 1 */
-  HAL_IncTick();
-  if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
-  {
+HAL_IncTick();
+if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+{
     xPortSysTickHandler();
-  }
+}
   /* USER CODE END SysTick_IRQn 1 */
 }
 

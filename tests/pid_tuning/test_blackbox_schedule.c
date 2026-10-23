@@ -9,18 +9,18 @@ int main(void)
     assert(g_blackbox_tx_stats.target_hz==1000 && g_blackbox_tx_stats.effective_hz==1000);
     for(i=0;i<100000;i++){assert(htim4.active_autoreload==999);timer_step();}
     assert(s_test_elapsed_us==100000000U && test_dma_calls==0);
-    Blackbox_ProcessPending();assert(g_blackbox_tx_stats.data_completed_count==1);
+    Blackbox_ProcessPending();assert(g_blackbox_tx_stats.data_enqueued_count==1);
     assert(g_blackbox_tx_stats.missed_trigger_count==99999);
     before=test_dma_calls;Blackbox_ProcessPending();assert(test_dma_calls==before);
     reset();for(i=0;i<20000;i++)recording_step();
-    assert(s_test_elapsed_us==20000000 && g_blackbox_tx_stats.data_completed_count==20000);
+    assert(s_test_elapsed_us==20000000 && g_blackbox_tx_stats.data_enqueued_count==20000);
     assert(!g_blackbox_tx_stats.bandwidth_skip_count && !g_blackbox_tx_stats.missed_trigger_count);
-    assert(g_blackbox_tx_stats.schema_completed_count==0 && s_schema_size>0);
+    assert(g_blackbox_tx_stats.legacy_schema_enqueue_mirror_count==0 && s_schema_size>0);
     assert(!test_dma_source[24+153]); /* No IMU still records snapshots. */
     reset();queue_reject=1;
     for(i=0;i<100;i++)recording_step();
     assert(g_blackbox_tx_stats.busy_drop_count>=100 && !g_blackbox_tx_stats.disabled);
-    queue_reject=0;recording_step();assert(g_blackbox_tx_stats.data_completed_count==1);
+    queue_reject=0;recording_step();assert(g_blackbox_tx_stats.data_enqueued_count==1);
     reset();s_payload_size=484;recording_step();
     assert(test_dma_size==512 && g_blackbox_tx_stats.effective_hz==1000);
     for(i=0;i<3;i++){

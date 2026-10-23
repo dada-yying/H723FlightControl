@@ -16,16 +16,45 @@ uint8_t EscPwm_IsArmed(void) { return test_armed; }
 void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason)
 { (void)reason; test_armed=0; memset(test_motors,0,sizeof(test_motors)); }
 void EscPwm_SetMixedNormalized(const float p[4]) { memcpy(test_motors,p,sizeof(test_motors)); }
+void EscPwm_GetControlSnapshot(EscPwmControlSnapshot_t *snapshot)
+{
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->state.armed = test_armed;
+}
+uint8_t EscPwm_CommitMixedNormalized(const float p[4], uint32_t generation)
+{
+    (void)generation;
+    if (!test_armed) return 0;
+    EscPwm_SetMixedNormalized(p);
+    return 1;
+}
+
+/* Tests explicitly commit their staged requests before each modeled cycle. */
+static void test_submit_and_run(void)
+{
+    g_flight_control_config_staging.commit_sequence++;
+    FlightControl_Run();
+}
+
+static void test_submit_and_filter(const AtomImuData_t *imu, float dt)
+{
+    const FlightControlConfig_t *config;
+    g_flight_control_config_staging.commit_sequence++;
+    config = FlightControl_BeginConfigCycle();
+    FlightControl_FilterGyro(imu, dt, config);
+}
+
 /* Fix the reference response explicitly, without changing production defaults. */
 static void test_flight_init(void)
 {
+    const FlightControlPidConfig_t zero_pid = {0};
     FlightControl_Init();
     /* Test gains are explicit; production gains are user tuning values. */
-    memset((void *)&g_flight_control_pid,0,sizeof(g_flight_control_pid));
-    g_flight_control_filter.q=0.07510204f;
-    g_flight_control_filter.r=1.0f;
-    g_flight_control_filter.yaw_q=0.07510204f;
-    g_flight_control_filter.yaw_r=1.0f;
+    g_flight_control_config_staging.config.pid = zero_pid;
+    g_flight_control_config_staging.config.q=0.07510204f;
+    g_flight_control_config_staging.config.r=1.0f;
+    g_flight_control_config_staging.config.yaw_q=0.07510204f;
+    g_flight_control_config_staging.config.yaw_r=1.0f;
 }
 static void near_value(float actual, float expected) { assert(fabsf(actual-expected)<0.0001f); }
 static void frame(uint16_t axis, uint16_t slider, uint8_t flags)
@@ -42,7 +71,7 @@ static void frame(uint16_t axis, uint16_t slider, uint8_t flags)
     test_tick++;
     for(b=0;b<25;b++) RcSbus_ConsumeByte(bytes[b]);
 }
-static void run(void) { test_imu.gyro_rx_count++; test_dwt.CYCCNT+=480000U; FlightControl_Run(); }
+static void run(void) { test_imu.gyro_rx_count++; test_dwt.CYCCNT+=480000U; test_submit_and_run(); }
 /* Independent double-precision reference with the scalar posterior formula. */
 static double reference_kalman(double *x, double *p, double z, double q, double r, double dt)
 {
@@ -90,18 +119,18 @@ static void test_filter(void)
     near_value(g_flight_control_state.yaw_rate_rad_s,-3);
     held=g_flight_control_state.roll_rate_rad_s;
     covariance=s_filter_covariance[0]; gain=g_flight_control_filter.gain[0];
-    g_flight_control_filter.q=0.3f; g_flight_control_filter.r=0.5f;
-    test_dwt.CYCCNT+=480000; FlightControl_Run();
+    g_flight_control_config_staging.config.q=0.3f; g_flight_control_config_staging.config.r=0.5f;
+    test_dwt.CYCCNT+=480000; test_submit_and_run();
     near_value(g_flight_control_state.roll_rate_rad_s,held);
     near_value(s_filter_covariance[0],covariance);
     near_value(g_flight_control_filter.gain[0],gain);
     near_value(g_flight_control_filter.applied_q,0.07510204f); /* No fresh sample. */
     near_value(g_flight_control_filter.applied_r,1);
-    g_flight_control_filter.q=0.07510204f; g_flight_control_filter.r=1;
+    g_flight_control_config_staging.config.q=0.07510204f; g_flight_control_config_staging.config.r=1;
     ref_x=held; ref_p=covariance;
     ref_gain=reference_kalman(&ref_x,&ref_p,reference_next_notch(0,2),0.07510204,1,0.002);
     test_imu.gyro_rx_count++; test_dwt.CYCCNT+=960000;
-    FlightControl_Run();
+    test_submit_and_run();
     near_value(g_flight_control_state.roll_rate_rad_s,(float)ref_x);
     near_value(s_filter_covariance[0],(float)ref_p);
     near_value(g_flight_control_filter.gain[0],(float)ref_gain);
@@ -113,9 +142,9 @@ static void test_filter(void)
     held=g_flight_control_state.roll_rate_rad_s;
     /* Active control must use the same filtered feedback exported to VOFA. */
     frame(1696,1024,0); test_armed=1;
-    g_flight_control_pid.rate_roll.kp=0.1f;
-    g_flight_control_pid.rate_roll.ki=0.01f;
-    g_flight_control_filter.q=0.3f; g_flight_control_filter.r=0.5f;
+    g_flight_control_config_staging.config.pid.rate_roll.kp=0.1f;
+    g_flight_control_config_staging.config.pid.rate_roll.ki=0.01f;
+    g_flight_control_config_staging.config.q=0.3f; g_flight_control_config_staging.config.r=0.5f;
     s_roll_integral=0.12f; s_last_roll_error=0.456f; s_have_error=1;
     ref_x=held; ref_p=s_filter_covariance[0];
     ref_gain=reference_kalman(&ref_x,&ref_p,reference_next_notch(0,-2),0.3,0.5,0.001);
@@ -134,18 +163,18 @@ static void test_filter(void)
     near_value(s_filtered_rate[0],held); near_value(s_filter_covariance[0],covariance);
     { const float invalid[]={0,-1,0.0000001f,1001,NAN,INFINITY,-INFINITY};
       for(i=0;i<sizeof(invalid)/sizeof(invalid[0]);i++) {
-        g_flight_control_filter.q=invalid[i]; g_flight_control_filter.r=2; run();
+        g_flight_control_config_staging.config.q=invalid[i]; g_flight_control_config_staging.config.r=2; run();
         near_value(g_flight_control_filter.applied_q,0.3f);
         near_value(g_flight_control_filter.applied_r,0.5f);
-        g_flight_control_filter.q=2; g_flight_control_filter.r=invalid[i]; run();
+        g_flight_control_config_staging.config.q=2; g_flight_control_config_staging.config.r=invalid[i]; run();
         near_value(g_flight_control_filter.applied_q,0.3f);
         near_value(g_flight_control_filter.applied_r,0.5f);
       } }
-    g_flight_control_filter.q=0.07510204f; g_flight_control_filter.r=1; run();
+    g_flight_control_config_staging.config.q=0.07510204f; g_flight_control_config_staging.config.r=1; run();
     test_tick+=11; FlightControl_OnTaskTimeout();
     assert(!s_filter_initialized && !test_armed);
     held=g_flight_control_state.roll_rate_rad_s;
-    FlightControl_Run(); /* Cached valid flag is not a new sample after timeout. */
+    test_submit_and_run(); /* Cached valid flag is not a new sample after timeout. */
     assert(!s_filter_initialized);
     near_value(g_flight_control_state.roll_rate_rad_s,held);
     test_imu.gyro_y=-4; run();
@@ -177,16 +206,16 @@ static void test_kalman_extremes(void)
     for(q_index=0;q_index<2;q_index++) for(r_index=0;r_index<2;r_index++) {
         RcSbus_Init(); test_flight_init(); test_armed=0;
         memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
-        g_flight_control_filter.q=params[q_index];
-        g_flight_control_filter.r=params[r_index];
-        g_flight_control_filter.yaw_q=params[q_index];
-        g_flight_control_filter.yaw_r=params[r_index];
+        g_flight_control_config_staging.config.q=params[q_index];
+        g_flight_control_config_staging.config.r=params[r_index];
+        g_flight_control_config_staging.config.yaw_q=params[q_index];
+        g_flight_control_config_staging.config.yaw_r=params[r_index];
         for(step=0;step<100;step++) {
             float dt=(step%2==0) ? 0.0002f : 0.005f;
             test_imu.gyro_y=(step%2==0) ? 10.0f : -10.0f;
             /* Exercise initialization and online updates at both dt limits. */
             test_imu.gyro_rx_count++;
-            FlightControl_FilterGyro(&test_imu,dt);
+            test_submit_and_filter(&test_imu,dt);
             assert(g_flight_control_filter.applied_q==params[q_index]);
             assert(g_flight_control_filter.applied_r==params[r_index]);
             for(axis=0;axis<3;axis++) {
@@ -200,8 +229,8 @@ static void test_kalman_extremes(void)
         }
     }
     FlightControl_Init();
-    near_value(g_flight_control_filter.q,FLIGHT_FILTER_DEFAULT_Q);
-    near_value(g_flight_control_filter.r,1);
+    near_value(g_flight_control_config_staging.config.q,FLIGHT_FILTER_DEFAULT_Q);
+    near_value(g_flight_control_config_staging.config.r,1);
     puts("PASS: Kalman extreme Q/R and dt, finite nonnegative covariance, bounded gain, independent axes, boot defaults");
 }
 static void test_rate_axis_mapping(void)
@@ -217,10 +246,10 @@ static void test_rate_axis_mapping(void)
         test_imu.gyro_x=0.3f; test_imu.gyro_y=0.2f; test_imu.gyro_z=-0.4f;
         test_imu.roll=0.1f; test_imu.pitch=-0.2f; test_imu.yaw=0.3f;
         frame(1696,1024,0); test_armed=1;
-        g_flight_control_pid.angle_roll.kp=0.5f;
-        g_flight_control_pid.angle_pitch.kp=0.5f;
-        if(axis==0) g_flight_control_pid.rate_roll.kp=0.1f;
-        else g_flight_control_pid.rate_pitch.kp=0.1f;
+        g_flight_control_config_staging.config.pid.angle_roll.kp=0.5f;
+        g_flight_control_config_staging.config.pid.angle_pitch.kp=0.5f;
+        if(axis==0) g_flight_control_config_staging.config.pid.rate_roll.kp=0.1f;
+        else g_flight_control_config_staging.config.pid.rate_pitch.kp=0.1f;
         run(); FlightControl_GetState(&state);
         near_value(state.roll_rate_rad_s,-0.2f);  /* -gyro_y */
         near_value(state.roll_rate_raw_rad_s,-0.2f);
@@ -283,7 +312,7 @@ static void test_pitch_rate_damping(void)
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
         test_imu.roll=0.12f; /* Pitch attitude mapping must not be inverted. */
         frame(352,1024,0); test_armed=1;
-        g_flight_control_pid.rate_pitch.kp=0.2f;
+        g_flight_control_config_staging.config.pid.rate_pitch.kp=0.2f;
         sign=(direction==0) ? 1.0f : -1.0f;
         expected=sign*0.3f;
         for(step=0;step<2;step++) {
@@ -336,8 +365,8 @@ static void test_roll_attitude_restoring_motors(void)
         test_imu.gyro_valid=1; test_imu.euler_valid=1;
         test_imu.pitch=(side==0) ? 0.2f : -0.2f;
         frame(1696,1024,0); test_armed=1;
-        g_flight_control_pid.angle_roll.kp=0.5f;
-        g_flight_control_pid.rate_roll.kp=0.2f;
+        g_flight_control_config_staging.config.pid.angle_roll.kp=0.5f;
+        g_flight_control_config_staging.config.pid.rate_roll.kp=0.2f;
         run(); FlightControl_GetState(&state);
         throttle=g_rc_sbus_data.throttle;
         correction=(side==0) ? 0.02f : -0.02f;
@@ -375,10 +404,10 @@ static void test_attitude_axis_mapping(void)
         if(axis==0) test_imu.pitch=-body_angle;
         if(axis==1) test_imu.roll=body_angle;
         if(axis==2) test_imu.yaw=-body_angle;
-        g_flight_control_pid.angle_roll.kp=(gain_case==0) ? 0.5f : 100.0f;
-        g_flight_control_pid.angle_pitch.kp=g_flight_control_pid.angle_roll.kp;
-        g_flight_control_pid.rate_roll.kp=0.2f;
-        g_flight_control_pid.rate_pitch.kp=0.2f;
+        g_flight_control_config_staging.config.pid.angle_roll.kp=(gain_case==0) ? 0.5f : 100.0f;
+        g_flight_control_config_staging.config.pid.angle_pitch.kp=g_flight_control_config_staging.config.pid.angle_roll.kp;
+        g_flight_control_config_staging.config.pid.rate_roll.kp=0.2f;
+        g_flight_control_config_staging.config.pid.rate_pitch.kp=0.2f;
         frame(1696,1024,0);
         run(); FlightControl_GetState(&state);
 
@@ -460,7 +489,7 @@ static void test_raw_roll_telemetry(void)
 
     /* A changed buffer without a fresh count must not replace either value. */
     test_imu.gyro_y=-99;
-    test_dwt.CYCCNT+=480000U; FlightControl_Run();
+    test_dwt.CYCCNT+=480000U; test_submit_and_run();
     FlightControl_GetState(&state);
     near_value(state.roll_rate_raw_rad_s,-2);
     near_value(state.roll_rate_rad_s,expected);
@@ -489,7 +518,7 @@ static void test_raw_roll_telemetry(void)
     near_value(g_flight_control_state.roll_rate_raw_rad_s,4);
     near_value(g_flight_control_state.roll_rate_rad_s,4);
     test_tick+=11; FlightControl_OnTaskTimeout();
-    test_imu.gyro_y=-9; FlightControl_Run(); /* Old count after timeout. */
+    test_imu.gyro_y=-9; test_submit_and_run(); /* Old count after timeout. */
     assert(!s_filter_initialized);
     near_value(g_flight_control_state.roll_rate_raw_rad_s,4);
     near_value(g_flight_control_state.roll_rate_rad_s,4);
@@ -529,7 +558,7 @@ static void test_raw_pitch_yaw_telemetry(void)
         near_value(decoded[14],state.pitch_rate_raw_rad_s*degrees);
         near_value(decoded[15],state.yaw_rate_raw_rad_s*degrees);
         test_imu.gyro_x=99; test_imu.gyro_z=99;
-        FlightControl_Run(); /* Duplicate sample cannot replace raw values. */
+        test_submit_and_run(); /* Duplicate sample cannot replace raw values. */
         near_value(g_flight_control_state.pitch_rate_raw_rad_s,state.pitch_rate_raw_rad_s);
         near_value(g_flight_control_state.yaw_rate_raw_rad_s,state.yaw_rate_raw_rad_s);
         test_imu.gyro_valid=0; run();
@@ -541,7 +570,7 @@ static void test_raw_pitch_yaw_telemetry(void)
         near_value(g_flight_control_state.pitch_rate_rad_s,-2);
         near_value(g_flight_control_state.yaw_rate_rad_s,-4);
         test_tick+=11; FlightControl_OnTaskTimeout();
-        test_imu.gyro_x=5; test_imu.gyro_z=-6; FlightControl_Run();
+        test_imu.gyro_x=5; test_imu.gyro_z=-6; test_submit_and_run();
         near_value(g_flight_control_state.pitch_rate_raw_rad_s,-2);
         near_value(g_flight_control_state.yaw_rate_raw_rad_s,-4);
         run();
@@ -567,14 +596,14 @@ int main(void)
     frame(1696,1040,0); near_value(g_rc_sbus_data.tuning_rate_rad_s,0);
     frame(1696,0,0); near_value(g_rc_sbus_data.tuning_rate_rad_s,1.570796327f);
     frame(1696,2047,0); near_value(g_rc_sbus_data.tuning_rate_rad_s,-1.570796327f);
-    g_flight_control_tuning.pid_debug=1; run();
+    g_flight_control_config_staging.config.pid_debug=1; run();
     assert(g_flight_control_tuning.active && g_flight_control_tuning.waiting_center);
     frame(1696,1024,0); run(); assert(!g_flight_control_tuning.waiting_center);
     test_armed=1; run(); assert(g_flight_control_tuning.waiting_center);
     frame(1696,1024,0); run(); assert(!g_flight_control_tuning.waiting_center);
-    g_flight_control_pid.rate_roll.kp=0.1f;
-    g_flight_control_pid.rate_pitch.kp=0.1f;
-    g_flight_control_pid.rate_yaw.kp=0.1f;
+    g_flight_control_config_staging.config.pid.rate_roll.kp=0.1f;
+    g_flight_control_config_staging.config.pid.rate_pitch.kp=0.1f;
+    g_flight_control_config_staging.config.pid.rate_yaw.kp=0.1f;
     test_imu.gyro_y=0.8f; test_imu.gyro_z=0.7f;
     frame(1696,352,0); run();
     near_value(g_flight_control_state.roll_rate_target_rad_s,1.570796327f);
@@ -582,7 +611,7 @@ int main(void)
     near_value(g_flight_control_state.yaw_rate_target_rad_s,0);
     near_value(test_motors[0],test_motors[3]); near_value(test_motors[1],test_motors[2]);
     near_value(s_pitch_integral,0); near_value(s_yaw_integral,0);
-    g_flight_control_tuning.pid_debug=0; run(); assert(g_flight_control_tuning.active);
+    g_flight_control_config_staging.config.pid_debug=0; run(); assert(g_flight_control_tuning.active);
     for(i=0;i<3;i++) { frame(1024,352,0); run(); }
     assert(g_flight_control_tuning.selected_axis==RC_TUNING_YAW);
     assert(g_flight_control_tuning.waiting_center);

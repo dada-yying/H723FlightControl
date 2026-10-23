@@ -1,0 +1,15 @@
+startup_guard armed=0 PWM=1000,1000,1000,1000 reason=1 valid=1
+low_high_rejected armed=0 PWM=1000,1000,1000,1000 reason=3 valid=1
+high_throttle_prearm_rejected armed=0 PWM=1000,1000,1000,1000 reason=3 valid=1
+middle_high_armed armed=1 PWM=1000,1000,1000,1000 reason=0 valid=1
+armed_output armed=1 PWM=1250,1250,1250,1250 reason=0 valid=1
+lost_frame_hold armed=1 PWM=1250,1250,1250,1250 reason=0 valid=1
+age99_hold armed=1 PWM=1250,1250,1250,1250 reason=0 valid=1
+age100_stop armed=0 PWM=1000,1000,1000,1000 reason=6 valid=0
+recovery_requires_middle armed=0 PWM=1000,1000,1000,1000 reason=3 valid=1
+failsafe_stop armed=0 PWM=1000,1000,1000,1000 reason=5 valid=0
+switch_lock armed=0 PWM=1000,1000,1000,1000 reason=2 valid=1
+imu_timeout armed=0 PWM=1000,1000,1000,1000 reason=7 valid=1
+wrap_age99 armed=1 PWM=1250,1250,1250,1250 reason=0 valid=1
+wrap_age100 armed=0 PWM=1000,1000,1000,1000 reason=6 valid=0
+PASS minimum sequential RC safety characterization

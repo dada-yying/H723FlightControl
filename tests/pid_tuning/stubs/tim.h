@@ -26,10 +26,16 @@ static HAL_StatusTypeDef HAL_TIM_Base_Stop_IT(TIM_HandleTypeDef *timer)
 #define TIM_CHANNEL_4 3U
 static HAL_StatusTypeDef test_pwm_start_status = HAL_OK;
 static unsigned test_check_pwm_critical;
+#ifdef TEST_SCHEDULER_HOOKS
+static void TestCompareHook(void);
+#endif
 static void test_set_compare(TIM_HandleTypeDef *timer, unsigned channel, uint32_t pulse)
 {
     if (test_check_pwm_critical) assert(test_critical_depth > 0);
     timer->compare[channel] = pulse;
+#ifdef TEST_SCHEDULER_HOOKS
+    TestCompareHook();
+#endif
 }
 #define __HAL_TIM_SET_COMPARE(t,c,p) test_set_compare(t,c,p)
 static HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *timer, unsigned channel)

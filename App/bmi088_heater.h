@@ -5,9 +5,10 @@
 
 #define BMI088_HEATER_TARGET_C 40.0f
 #define BMI088_HEATER_OVERTEMP_C 45.0f
-#define BMI088_HEATER_MAX_CCR 1500U /* ARR=9999, maximum duty 5%, as board example. */
+#define BMI088_HEATER_MAX_CCR 1500U /* ARR=9999, maximum duty 15%, as board example. */
 
-typedef enum {
+typedef enum
+{
     BMI088_HEATER_OK = 0,
     BMI088_HEATER_WAIT_SAMPLE,
     BMI088_HEATER_SENSOR_INVALID,
@@ -18,7 +19,8 @@ typedef enum {
     BMI088_HEATER_PWM_ERROR
 } Bmi088HeaterStopReason_t;
 
-typedef struct {
+typedef struct
+{
     float target_c;
     float temperature_c;
     float error_c;
@@ -41,7 +43,7 @@ extern volatile Bmi088HeaterState_t g_bmi088_heater_state;
 extern volatile uint32_t g_bmi088_heater_force_stop;
 
 void Bmi088Heater_Init(HAL_StatusTypeDef pwm_init_status);
-void Bmi088Heater_Process(void); /* 50 Hz control, fresh complete SPI reads only. */
+void Bmi088Heater_Process(void);      /* 50 Hz control, fresh complete SPI reads only. */
 void Bmi088Heater_CheckTimeout(void); /* Default task: independent 10 ms guard. */
 
 #endif
