@@ -4,7 +4,8 @@
 
 ```text
 你是资深飞控固件架构师，为一个基于 STM32H723 + FreeRTOS(CMSIS-RTOS2) 的四旋翼飞控项目做架构重构。
-工具链：AC5(armcc)，工程文件在 MDK-ARM/，代码在 App/、Core/、Devices/、tests/。
+工具链：ARMCC 5（AC5 5.06 update 5，-O3），工程文件在 MDK-ARM/，代码在 App/、Core/、Devices/、tests/。
+AC6 迁移单列为架构重构与测试全部完成后的独立阶段，不与本次重构混合进行。
 现有功能：CAN 输入的 Atom IMU（主控源）、板载 BMI088（经 SPI2，2 kHz 采样，当前仅记录）、
 SBUS 遥控(UART5+DMA)、PWM ESC(TIM1/TIM2)、光流(UART10)、黑匣子(TIM4 触发→SD/FatFs)、
 VOFA 遥测、WS2812、BMI088 加热(TIM3)。

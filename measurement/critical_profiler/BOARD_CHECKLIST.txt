@@ -1,0 +1,25 @@
+Board run checklist - execute only after user approval; no board operation performed by Codex
+
+Preparation:
+1. Keep the accepted production HEX and hashes. Review independent measurement build and +512-byte RC stack allocation. Use its AXF for symbols; do not switch the production Keil project to forced includes globally.
+2. Remove propellers before any unlock/motor-output exercise. Reboot for each independent measurement session. Record build SHA256, AC5 -O3, SystemCoreClock, board state and test duration.
+3. Let the core run freely. Use existing debugger live memory reads only if they do not halt execution. Do not single-step, break, sleep or reset CYCCNT. Observe snapshot sequence advancing at approximately telemetry cadence. A halt/stalled sequence invalidates the run.
+4. Wait for complete=1 and valid=1, faults=0, current_depth=0. Read sequence/complete before and after the exported snapshot; discard a copy if they changed. Inspect task stack high-water/heap minimum; static stack analysis is not enough.
+
+Exercise and record each path:
+- Startup: inspect startup_pairs, init outcomes and task creation. Startup durations are NOT MEASURED by this runtime profiler; do not substitute zero.
+- Steady Atom/BMI acquisition and blackbox: sustained 1 kHz/2 kHz work with normal logging and VOFA load; record sample losses and actual run duration.
+- RC: normal frames, bursts, stale/timeout and recovery; keep actual confirmed endpoints/thresholds unchanged.
+- Prop-off arming: middle/high sequence, lock, failsafe, IMU timeout and recovery; check output safety alongside stats.
+- SD: normal write/sync, busy/timeout, recovery and full-card/error paths that can be exercised without losing valuable data. A path with no hits remains NOT MEASURED.
+- Optical flow: normal DMA and explicitly selected IT diagnostic reception, rearm/recovery and bursts. Record requested/current mode.
+- Telemetry/WS2812: retain existing frame and LED activity. Read snapshot stats without injecting a second UART format.
+- Heater: normal PI, independent timeout guard and nested BMI getter. Both heater outer site maxima must show inclusive depth at least 2 with BMI getter hits. Do not change heater parameters or defeat temperature protections.
+- Diagnostic getters not called in normal flow: do not use debugger function calls while halted. A dedicated measurement-only task invocation would require a reviewed extension; otherwise mark those rows NOT MEASURED.
+
+Export/report:
+For every site retain ID/source/line, hits, inclusive depth, exact max cycles, ceil microseconds, body/envelope labels, wrapper bookkeeping/envelope maxima, global outer maxima, accounting-window maximum and snapshot scheduling envelope. Keep raw snapshots, run duration, trigger counts, all fault flags and high-water/heap data.
+Compare measured BODY and conservative ENVELOPE separately with static budgets. Do not subtract arbitrary overhead, sum unrelated maxima or present an envelope as exact disabled time.
+Any fault, unbalanced depth, counter saturation, missing heartbeat, clock change or debugger halt rejects the entire run. Never report an unhit path as 0 us.
+These are observed maxima under the exercised conditions, NOT formal WCET proof. Kernel/HAL internal BASEPRI/PRIMASK and terminal fault windows remain explicitly uncovered.
+After review, restore the production image; stage 3 requires separate user authorization.

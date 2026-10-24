@@ -1,0 +1,56 @@
+ID | Batch | Source/function | Entry | Exits | Static budget us | Runtime
+0 | C | Core/Src/fdcan.c:FDCAN3_UpdateDiagnostics | 237 | 239 | 5 | OBSERVED
+1 | C | Core/Src/fdcan.c:FDCAN3_GetDiagnostics | 245 | 253 | 3 | NOT MEASURED
+2 | registered heater exception | App/bmi088_heater.c:Bmi088Heater_CheckTimeout | 117 | 122 | 12 | OBSERVED
+3 | registered heater exception | App/bmi088_heater.c:Bmi088Heater_Process | 130 | 135,142,172 | 12 | OBSERVED
+4 | C | App/bmi088.c:Bmi088_PublishAuxiliary | 57 | 60 | 5 | NOT MEASURED
+5 | C | App/bmi088.c:Bmi088_Fail | 178 | 183 | 3 | NOT MEASURED
+6 | C | App/bmi088.c:Bmi088_Configure | 254 | 257 | 5 | OBSERVED
+7 | C | App/bmi088.c:Bmi088_ReadSample | 354 | 358 | 6 | OBSERVED
+8 | C | App/bmi088.c:Bmi088_GetSnapshotWithFilter | 423 | 428 | 6 | OBSERVED
+9 | C | App/bmi088.c:Bmi088_RecordStackWatermark | 564 | 566 | 5 | OBSERVED
+10 | C | App/bmi088.c:Bmi088_GetStats | 572 | 576 | 3 | NOT MEASURED
+11 | C | App/vofa.c:VOFA_Transmit | 29 | 37 | 5 | OBSERVED
+12 | C | App/vofa.c:VOFA_GetStats | 145 | 147 | 2 | NOT MEASURED
+13 | C | App/blackbox.c:Blackbox_StartRecording | 106 | 121 | 6 | OBSERVED
+14 | C | App/blackbox.c:Blackbox_SendSnapshot | 178 | 183,187 | 5 | OBSERVED
+15 | C | App/blackbox.c:Blackbox_RecordStackWatermark | 254 | 256 | 5 | OBSERVED
+16 | C | App/blackbox.c:Blackbox_GetTxStats | 262 | 266 | 3 | NOT MEASURED
+17 | C | App/optical_flow.c:OpticalFlow_Start | 144 | 153 | 5 | OBSERVED
+18 | C | App/optical_flow.c:OF_Publish | 331 | 349 | 6 | OBSERVED
+19 | C | App/optical_flow.c:OpticalFlow_GetData | 394 | 402 | 6 | OBSERVED
+20 | C | App/optical_flow.c:OpticalFlow_GetStats | 459 | 470 | 3 | NOT MEASURED
+21 | C | App/optical_flow.c:OpticalFlow_GetDiagnostics | 479 | 497 | 10 | NOT MEASURED
+22 | C | App/optical_flow.c:OpticalFlow_ProcessPending | 505 | 508 | 7 | OBSERVED
+23 | C | App/rc_sbus.c:RcSbus_Publish | 126 | 128 | 6 | OBSERVED
+24 | C | App/rc_sbus.c:RcSbus_GetData | 344 | 346 | 5 | OBSERVED
+25 | B | App/flight_control.c:FlightControl_BeginConfigCycle | 132 | 161 | 5 | OBSERVED
+26 | B | App/flight_control.c:FlightControl_GetConfig | 174 | 179 | 3 | NOT MEASURED
+27 | C | App/flight_control.c:FlightControl_GetState | 668 | 670 | 6 | OBSERVED
+28 | C | App/flight_control.c:FlightControl_PublishState | 676 | 678 | 5 | OBSERVED
+29 | A | App/esc_pwm.c:EscPwm_GetControlSnapshot | 143 | 152 | 6 | OBSERVED
+30 | A | App/esc_pwm.c:EscPwm_CommitMixedNormalized | 171 | 187 | 7 | OBSERVED
+31 | A | App/esc_pwm.c:EscPwm_SetMotorNormalized | 210 | 224 | 2 | NOT MEASURED
+32 | A | App/esc_pwm.c:EscPwm_SetAllNormalized | 234 | 249 | 5 | NOT MEASURED
+33 | A | App/esc_pwm.c:EscPwm_ForceMinimum | 256 | 271 | 7 | OBSERVED
+34 | A | App/esc_pwm.c:EscPwm_UpdateFromRc | 376 | 385 | 7 | OBSERVED
+35 | A | App/esc_pwm.c:EscPwm_GetDiagnostics | 402 | 412 | 2 | NOT MEASURED
+36 | C | Devices/WS2812/ws2812.c:WS2812_GetStats | 114 | 123 | 2 | NOT MEASURED
+37 | C | App/storage/blackbox_storage.c:Blackbox_GetStats | 68 | 73 | 5 | NOT MEASURED
+38 | C | App/storage/blackbox_storage.c:BlackboxStorage_Process | 921 | 923 | 6 | OBSERVED
+39 | C | App/storage/sd_spi.c:dma_transfer | 515 | 520 | 5 | OBSERVED
+40 | C | App/storage/sd_spi.c:SdSpi_GetDiagnostics | 1059 | 1063 | 5 | NOT MEASURED
+
+NOT COVERED (not zero time):
+- FreeRTOS kernel/CMSIS wrapper/heap internal BASEPRI windows: no forced include applied.
+- HAL internal BASEPRI/PRIMASK windows: no forced include applied.
+- main Error_Handler and fault handler PRIMASK disables: terminal fault paths, not application task critical measurements.
+- Profiler accounting raw-port critical windows: separate max_accounting_body_cycles; port boundaries excluded from that sample.
+- Snapshot publication scheduling suspension: separate max_snapshot_envelope_cycles; IRQs enabled, task scheduling delayed.
+- Startup pre-scheduler pairs: startup_pairs only, no duration claim because FreeRTOS startup nesting/mask semantics differ.
+- Watch/debug halt, sleep and more than one DWT wrap with stalled independent tick: invalid capture procedure, no inferred duration.
+
+Budget revision 2026-10-24: observed body ceil + 2 us; explicit user override site 3 = 12 us (generic formula = 13 us).
+Original budgets / measured cycles / adopted budgets: audit/phase2_c_final/CRITICAL_SECTIONS.txt.
+Frozen run1 manifest and reports retain original budgets; do not rewrite capture history.
+- WS2812 scheduler suspension / polling SPI: Devices/WS2812/ws2812.c:42-61; NOT MEASURED, outside these 41 task critical sites.

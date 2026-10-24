@@ -1020,8 +1020,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>..\App\ws2812_ctrl.c</PathWithFileName>
-      <FilenameWithoutPath>ws2812_ctrl.c</FilenameWithoutPath>
+      <PathWithFileName>../BSP/bsp_dwt.c</PathWithFileName>
+      <FilenameWithoutPath>bsp_dwt.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>

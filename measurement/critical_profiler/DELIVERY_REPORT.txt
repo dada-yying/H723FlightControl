@@ -1,0 +1,53 @@
+Measurement-only critical profiler - software delivery, 2026-10-23
+Status: READY FOR USER CODE REVIEW. Not flashed; all target paths NOT MEASURED. Stage 3 not started.
+
+Build isolation:
+Run from project root: python -X utf8 -B measurement/critical_profiler/build_measurement.py
+This builds into audit/dwt_profiler/measurement_ac5; it does NOT alter the Keil project or production build script.
+Only owned application translation units receive generated --preinclude headers. Those headers include FreeRTOS/task.h first, then replace application taskENTER_CRITICAL/EXIT with a direct numeric site call. Header guards prevent a later redefinition from silently undoing the wrapper.
+Kernel, HAL, Drivers, ThirdParty, profiler module and adapter are not forced-included. The unchanged main/RTOS/heater source is compiled from its original location. Site catalog/forced headers are generated into the build output, not production source.
+Build count: original 64 sources plus profiler, adapter and generated catalog = 67.
+Production rebuild remains 64 sources and matches the accepted stage-2 HEX byte-for-byte.
+
+Coverage evidence:
+41 application entry sites and 44 exit call sites. Multiple exits from one function share its entry ID (heater early exits and blackbox state early return). A/B/C + heater exception are listed individually in COVERAGE_MATRIX.txt.
+Retained AC5 .i files: audit/dwt_profiler/measurement_ac5/preprocessed/.
+Audit JSON: preprocessor_audit.json; audit_preprocessed.py independently compares every owned .c/.h macro occurrence to the inventory, counts actual expanded calls, rejects raw-port bypasses and tests missing/duplicate-call negative controls.
+The telemetry call site has exactly one snapshot tap; all 8 RTOS creation calls route through the measurement-only resource adapter.
+
+Measurement semantics (do not conflate):
+- body_cycles: sample after real port enter to sample before real port exit. This is a continuously masked sampled body interval including profiler/nested overhead. It excludes boundary instructions and is NOT an exact full BASEPRI assertion-to-release duration.
+- envelope_cycles: before enter wrapper to after real port exit. May include task/ISR preemption before raising or after releasing BASEPRI. It is a conservative envelope, NOT an IRQ-disabled duration.
+- outer_body/envelope maxima only update for the frame whose depth transitions 1->0. Nested intervals never restart the outer start. Each site's inclusive maximum includes its children.
+- enter/exit envelope overhead and enter/exit bookkeeping maxima are recorded separately. They overlap body/envelope as documented; do not sum maxima or subtract a guessed overhead to fabricate an uninstrumented duration.
+- A separate short unwrapped accounting critical section serializes counters after the application mask releases. Its sampled body maximum is reported separately, including when nested within a parent interval.
+- Snapshot copy uses scheduler suspension rather than a long interrupt mask. Its sampled scheduling envelope is separate. This is measurement perturbation, not production behavior.
+- Integer cycles are retained exactly as uint32. Microseconds are ceil(cycles/(clock/1e6)); non-integer-MHz clocks reject the run. No floating-point printf or dynamic allocation is used by the profiler.
+
+Resource disclosure:
+Cp_Exit was reduced from 88 to 56 static stack bytes. Measured-build RcTask static call-chain depth is 504 bytes, versus 456 in the production build. Its original 512-byte allocation leaves insufficient exception/context margin.
+Therefore the measurement-only Cp_ThreadNew adapter allocates RcTask 1024 bytes (+512 from the existing FreeRTOS heap). It preserves entry, argument, priority and name. No production task attributes/source are edited; other tasks are unchanged. Snapshot measurement_rc_stack_bytes=1024 discloses this.
+Static linker depth is not a runtime stack guarantee; verify all task high-water marks and heap after startup on the board. No hidden stack-setting change is applied to production.
+
+Output:
+Use g_cp_snapshot in Keil Watch/memory export. catalog maps IDs to source/function/entry. complete and sequence must remain stable across a read. valid=0 or any fault rejects the entire run; hits=0 is NOT MEASURED.
+Snapshot refresh occurs on the existing 100 Hz telemetry call site. Cp_TelemetryTap invokes original VOFA_SendFrame with exactly the original frame and returns its original HAL status. No profiler channel/bytes are appended and there is NO measurement stream on UART in this implementation. Thus there is no mixed-format serial stream or lossy float cycle encoding.
+A frozen/nonadvancing sequence is not evidence of a safe duration: discard halted/deadlocked runs. Missing exits can stop scheduling and prevent a new snapshot; this is detected operationally by missing heartbeat, not a fabricated timing value.
+
+Invalid runs:
+Sticky depth overflow, unmatched entry/exit, invalid site, ISR use, unexpected masked outer entry, task-owner mismatch, disabled/changed clock, zero or >1 s sampled interval, counter overflow and snapshot inside an active mask invalidate capture. Reboot starts a new run; no runtime clear/reset hides faults. Startup pairs are balanced through the original primitives but excluded from timing.
+Unsigned subtraction supports one CYCCNT wrap. Multiple wraps combined with halted HAL tick cannot be diagnosed from these clocks alone. Do not halt the core during a run, enter sleep, or trust a run with a stopped snapshot heartbeat. HardFault/NMI/terminal fault runs are outside acceptance.
+
+Tests/evidence:
+AC5 -O3 measurement build: 0 warnings/errors. Production isolation rebuild: 0 warnings/errors and same HEX.
+12 strict GCC host invariant groups; real unchanged heater/BMI nested integration; exact UART-frame/status and measurement-stack-adapter test. These use synthetic cycles and establish software invariants, not target execution times.
+A generated host integration fixture renames only the test entry point to avoid colliding main definitions; original tests and heater are not edited.
+
+Files:
+critical_profiler.c/.h: static nesting, maxima, invalidation and Watch snapshot.
+cp_platform.h: real port/DWT adaptation and host seam.
+telemetry_adapter.c: original-frame snapshot tap and RC measurement-only stack headroom.
+build_measurement.py: isolated build, generation and first coverage check.
+audit_preprocessed.py: independent coverage/hash/negative-control audit.
+tests/: host platform, invariants, actual-heater integration and adapter tests.
+CODEX_架构优化提示词.md: requested AC5 5.06 update 5 -O3 wording and separate post-refactor AC6 stage.

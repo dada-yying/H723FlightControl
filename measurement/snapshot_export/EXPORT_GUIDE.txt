@@ -1,0 +1,90 @@
+DWT 快照导出与离线解析（本次仅交软件，未连接、未烧录、未读取板上数据）
+
+一、绑定正确构建
+当前 bundle 来自 audit/dwt_profiler/measurement_ac5/firmware.axf 与 firmware.map。
+g_cp_snapshot = 0x2000B258，1716 字节 = 0x6B4。
+头部76字节（19个32位字段），41个站点，每站点40字节。
+AXF SHA256 = ff2418224c0086cbc39e78ed47cc3b20e49b52c3fc7793e41c9e51186b2ee671。
+这些地址仅适用于该构建；重编译后必须重新 prepare，不可沿用旧地址。
+
+在工程根目录运行（仅本地主机编译布局探针，不连接探针）：
+python -X utf8 -B measurement/snapshot_export/snapshot_tool.py prepare --build audit/dwt_profiler/measurement_ac5 --out audit/dwt_export/bundle
+prepare 从 map 读取符号地址/大小，与 AXF ELF 符号核对；用同一 AC5 ABI 的 sizeof/offsetof 探针验证布局、TCB pxStack偏移、栈填充值和增长方向。探针包含原 FreeRTOS tasks.c 仅用于编译取类型，生成的 object 不链接进固件、不烧录。
+manifest.json 记录 AXF/map/HEX 哈希、地址、布局、任务和站点预算。请保存原始二进制，不用编辑器打开后另存。
+
+二、运行与结束边界
+1. 用户自行烧录已审查 measurement AXF，复位后自由运行；本交付未执行烧录。
+2. 运行期间只做真正不暂停 CPU 的 Live Watch/内存读取。观察 sequence 约100Hz推进（实际受调度影响），complete=1、valid=1、faults=0、current_depth=0。启动阶段有效命中前 valid=0属未开始有效采样。
+3. 禁止断点、单步、睡眠、CYCCNT复位、调试器目标函数求值；不允许把自动halt/read/resume当作Live Watch。
+4. 场景结束先拆桨条件下安全锁定、停止刺激；让系统继续自由运行至少几个遥测周期，确认完成一次新的完整快照。记录最后观察的sequence和终止时刻。
+5. 最终执行一次halt作为该轮采集终点，然后只读导出，不reset、不resume、不调用目标函数。这个最终halt不使已发布历史数据失效，但之后不能继续本轮计时。新的场景用新一轮重启采集。
+6. 导出仅代表最后完整快照周期（通常比halt早约一个遥测周期），不是保证覆盖最后一条CPU指令的最大值。若 complete=0、实时s_depth不为0、faults非0，或解析器检测到未完成统计，拒绝本次捕获；不得修改字节来“修正”。重新开始独立运行。
+7. 同一探针只由一个调试服务占用。测量前选定连接方式；不能在运行中切换到会复位/暂停的工具。不同工具重连若无法保证无reset，应新建一次独立运行。
+
+三、J-Link Commander 方案
+使用当前软件支持的精确STM32H723型号，SWD连接；连接及首次复位在测量开始前完成。不要选connect-under-reset作为结束导出步骤。
+运行时可用已有Live Watch；Commander的非暂停内存观察示例：
+mem32 0x2000B258 0xA
+前10个words依次为version/sequence/complete/valid/faults/core_clock/site_count/current_depth/max_depth/startup_pairs。
+
+结束后将 bundle/jlink_dump.jlink 的命令逐行送入同一已连接 Commander 会话。首行为halt；后续只有SaveBin。文件相对路径写入Commander工作目录；请事先选择一个本轮专用capture目录，不覆盖旧轮次。
+关键命令（当前构建）：
+halt
+SaveBin header_before.bin 0x2000B258 0x4C
+SaveBin snapshot.bin 0x2000B258 0x6B4
+SaveBin header_after.bin 0x2000B258 0x4C
+完整生成脚本还导出 live_faults.bin、live_depth.bin、heap_min.bin、heap_free.bin、10个任务句柄文件。
+无g、reset、loadfile、exit命令。保持halt；关闭工具的自动恢复行为须按本机设置核实。
+
+J-Link全部任务栈无需执行函数，分两次解引用：
+python -X utf8 -B measurement/snapshot_export/snapshot_tool.py jlink-tcb --manifest audit/dwt_export/bundle/manifest.json --capture <capture目录>
+将生成的 jlink_tcb.jlink 逐行执行，导出每个TCB到pxStack字段为止。
+python -X utf8 -B measurement/snapshot_export/snapshot_tool.py jlink-stacks --manifest audit/dwt_export/bundle/manifest.json --capture <capture目录>
+将生成的 jlink_stacks.jlink 逐行执行，导出10个完整任务栈。保持同一次halt，不能中途reset/resume。
+此构建的pxStack偏移为48字节。指针范围限定为该构建使用的DTCM；遇到范围错误必须检查镜像/句柄，不可盲目放宽。
+
+四、ST-Link + OpenOCD 方案
+使用与当前OpenOCD发行版及板卡匹配的 interface/stlink.cfg 和 target/stm32h7x.cfg；不要同时让Keil占用ST-Link。以下是配置形式，连接/自由运行应在本轮测量开始前安排：
+openocd -f interface/stlink.cfg -f target/stm32h7x.cfg
+连接同一服务的telnet控制台（默认4444）或GDB monitor。运行中不下reset/halt/step命令。非暂停观察可用：
+mdw 0x2000B258 10
+
+场景结束，在OpenOCD当前工作目录已设为本轮capture目录后执行：
+source <bundle绝对路径>/openocd_dump.tcl
+脚本执行halt、wait_halt和dump_image；随后用read_memory读取任务句柄与pxStack，自动导出全部任务栈。没有reset、resume、flash或memory-write操作。
+核心命令为：
+dump_image snapshot.bin 0x2000B258 0x6B4
+若本机服务器使用不同端口/配置脚本路径，请按该安装调整；这些命令已依据官方文档核对，但未在你的探针上执行。
+
+五、离线解析
+在工程根目录：
+python -X utf8 -B measurement/snapshot_export/snapshot_tool.py decode --manifest audit/dwt_export/bundle/manifest.json --capture <capture目录>
+输出：
+- report.json：全部头部字段、外层body/envelope、accounting和snapshot包络、faults/valid/sequence/startup_pairs、原始文件哈希、heap及任务。
+- sites.csv：ID、文件、函数、行、hits、两个ceil微秒最大值、最大嵌套、预算及body/envelope分别的余量百分比。
+- tasks.csv：10个任务，配置栈、最低未用words/bytes、读取状态和阶段5触发项。
+余量=100*(预算-ceil微秒)/预算，负值代表超预算。包络包含潜在抢占，不能误称为实际关中断时间；body也不含port边界指令。保留原始cycles，不自行扣除估计开销。
+hits=0标NOT MEASURED，余量留空；拒绝运行保留数值仅供诊断，不给通过余量。
+解析器检查精确1716字节、前后头一致、版本/站点数/catalog指针、cycles/us关系、实时fault/depth。软件检查通过仅表示内部一致，仍须用户填写“无中途暂停、镜像正确”的运行记录。
+
+六、全部任务高水位与heap
+首选结束后用兼容此FreeRTOS版本的Keil RTOS-aware Viewer读取10个任务的最低剩余/历史最大使用，不把当前SP余量当高水位。菜单入口通常在 Debug -> OS Support；RTX的System and Thread Viewer不能未经核实就当作FreeRTOS支持。若插件不支持当前内核，使用上述离线栈扫描，不猜测结果。
+本项目 uxTaskGetStackHighWaterMark(handle) 返回words，sizeof(StackType_t)=4，因此 bytes=words*4；heap最低剩余为字节。
+有效句柄：defaultTaskHandle、rcTaskHandle、opticalFlowTaskHandle、bmi088TaskHandle、blackboxTaskHandle、blackboxStorageTaskHandle、flightControlTaskHandle、ws2812TaskHandle、xIdleTaskHandle、xTimerTaskHandle。
+本地tasks.c从TCB->pxStack起扫描0xA5，再除以4；离线扫描复现这个规则并对栈大小作有界检查。它与API同属填充模式水位，不是对所有栈越界的形式化证明。全栈A5、空句柄、错误长度不能记成“安全”。
+不要在实时测量期间通过调试器执行uxTaskGetStackHighWaterMark。当前已有统计可辅助查看，但不覆盖全部10个任务；本方案用完整栈dump补齐，不增加固件采集调用。
+heap_min.bin读取heap_4内部xMinimumEverFreeBytesRemaining，对应xPortGetMinimumEverFreeHeapSize()；heap_free.bin是当前剩余。当前地址分别0x20000240、0x2000023C，以manifest重新生成值为准。
+
+七、生产风险与验收边界
+RcTask生产512B、生产静态调用链456B，差额仅56B。已登记STAGE5_STACK_FOLLOWUP.txt。
+实际最低剩余低于128B时生成阶段5待办。测量RcTask为1024B，不能简单减512B推导生产水位，也不能以测量栈充足认定生产安全。本阶段不改生产栈。
+模板在bundle/BOARD_REPORT_TEMPLATE.txt、SITE_REPORT_TEMPLATE.csv、TASK_WATERMARK_TEMPLATE.csv。
+全部工具只在主机准备/解析文件，不自动执行探针命令；本交付没有板上数据，SYNTHETIC_TESTS目录只含软件测试样本，禁止作为实测报告。
+观测最大值不是形式化WCET证明。等待用户完成上板实测后裁决阶段2，禁止自动进入阶段3。
+
+命令/语义依据（本项目源码与以下官方文档）：
+https://kb.segger.com/J-Link_Commander#SaveBin
+https://www.openocd.org/doc/html/General-Commands.html
+https://www.keil.com/support/man/docs/uv4cl/uv4cl_db_dbg_systhread_viewer.htm （该页为特定RTOS Viewer说明，不能替代FreeRTOS插件兼容性核对）
+https://www.freertos.org/media/2018/FreeRTOS_Reference_Manual_V10.0.0.pdf
+本地 Middlewares/Third_Party/FreeRTOS/Source/tasks.c:prvTaskCheckFreeStackSpace 与 uxTaskGetStackHighWaterMark；portable/RVDS/ARM_CM4F/portmacro.h；heap_4.c。
