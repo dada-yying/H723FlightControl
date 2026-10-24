@@ -212,7 +212,6 @@ void StartDefaultTask(void *argument)
   for (;;)
   {
     Bmi088Heater_CheckTimeout();
-    FDCAN3_UpdateDiagnostics();
     RcSbus_GetData(&rc_data);
     FlightControl_GetState(&flight_data);
     EscPwm_GetState(&esc_data);
@@ -257,7 +256,6 @@ void StartRcTask(void *argument)
 /* USER CODE END Header_StartFlightControlTask */
 void StartFlightControlTask(void *argument)
 {
-  uint32_t pending_gyro_frames = 0U;
   uint32_t received;
 
   (void)argument;
@@ -269,12 +267,9 @@ void StartFlightControlTask(void *argument)
       FlightControl_OnTaskTimeout();
       continue;
     }
-    pending_gyro_frames += received;
-    if (pending_gyro_frames >= 2U)
-    {
-      pending_gyro_frames = 0U;
-      FlightControl_Run();
-    }
+    /* Notifications already divided by two at the BMI producer.
+     * Merge delayed notifications: one latest snapshot, no catch-up. */
+    FlightControl_Run();
   }
 }
 

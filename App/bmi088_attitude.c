@@ -1,4 +1,4 @@
-/* Independent logging-only six-axis AHRS. The pinned MIT Fusion implementation
+/* BMI088 flight-control six-axis AHRS. The pinned MIT Fusion implementation
  * and its license are in ThirdParty/Fusion. No ATOM/PID/motor dependency. */
 #include "bmi088_attitude.h"
 #include "../ThirdParty/Fusion/FusionAhrs.h"
@@ -17,7 +17,7 @@ static uint32_t s_cycle, s_tick, s_count, s_align_tick, s_align_samples;
 static uint8_t s_seen;
 static FusionVector s_align_sum;
 static const FusionAhrsSettings s_settings = {
-    .sampleRate = 2000.0f, .convention = FusionConventionNed,
+    .sampleRate = 2000.0f, .convention = FusionConventionEnu,
     .gain = 0.5f,
     /* Saturation is rejected by this wrapper, not Fusion's startup/Yaw reset. */
     .gyroscopeRange = 0.0f, .accelerationRejection = 10.0f,
@@ -69,7 +69,7 @@ static int BmiAttitude_Extract(void)
     e = FusionQuaternionToEuler(q);
     for (i = 0; i < 3; i++) if (!BmiAttitude_Finite(e.array[i])) return 0;
     s_attitude.roll_rad = FusionDegreesToRadians(e.angle.roll);
-    s_attitude.pitch_rad = -FusionDegreesToRadians(e.angle.pitch); /* Nose down. */
+    s_attitude.pitch_rad = FusionDegreesToRadians(e.angle.pitch);
     s_attitude.yaw_rad = FusionDegreesToRadians(e.angle.yaw);
     memcpy(s_attitude.quaternion, q.array, sizeof(q.array));
     return 1;
@@ -77,11 +77,10 @@ static int BmiAttitude_Extract(void)
 
 static void BmiAttitude_Align(FusionVector acceleration)
 {
-    /* Accel is specific force in FRD: at level = (0,0,-g). Initial heading is
-     * unobservable and defined as zero. These atan2 expressions also handle
-     * inverted startup without a zero axis-angle normalisation. */
-    const float roll = atan2f(-acceleration.axis.y, -acceleration.axis.z);
-    const float pitch = atan2f(acceleration.axis.x,
+    /* RFU body / relative ENU world: level specific force = (0,0,+g).
+     * Heading is unobservable and starts at zero. */
+    const float roll = atan2f(acceleration.axis.y, acceleration.axis.z);
+    const float pitch = atan2f(-acceleration.axis.x,
         sqrtf(acceleration.axis.y * acceleration.axis.y + acceleration.axis.z * acceleration.axis.z));
     const float cr = cosf(roll * 0.5f), sr = sinf(roll * 0.5f);
     const float cp = cosf(pitch * 0.5f), sp = sinf(pitch * 0.5f);
@@ -142,11 +141,11 @@ const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
         s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_BAD_INPUT);
         return &s_attitude;
     }
-    /* Six-face logs: native X=right, Y=forward, Z=up. Apply the SAME proper
-     * rotation to accelerometer and gyro: body FRD = (native Y, X, -Z).
-     * This does not modify calibrated raw arrays or ATOM's independent axes. */
-    accel.axis.x = sample->accel_m_s2[1]; accel.axis.y = sample->accel_m_s2[0]; accel.axis.z = -sample->accel_m_s2[2];
-    gyro.axis.x = filter->gyro_rad_s[1]; gyro.axis.y = filter->gyro_rad_s[0]; gyro.axis.z = -filter->gyro_rad_s[2];
+    /* Native X=right, Y=forward, Z=up is already the right-handed control frame. */
+    for (i = 0; i < 3; i++) {
+        accel.array[i] = sample->accel_m_s2[i];
+        gyro.array[i] = filter->gyro_rad_s[i];
+    }
     s_attitude.accel_norm_m_s2 = FusionVectorNorm(accel);
     if (!s_attitude.initialized) {
         if (s_attitude.accel_norm_m_s2 < 0.8f * BMI_ATTITUDE_GRAVITY ||

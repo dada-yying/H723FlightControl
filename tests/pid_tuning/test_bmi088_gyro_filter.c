@@ -180,8 +180,8 @@ int main(void)
     assert(g_bmi088_attitude_state.valid);
     result=filter_feed(500,0,0,-1);
     { const Bmi088AttitudeState_t *a=Bmi088Attitude_Compute(&filter_input,result,test_dwt.CYCCNT);
-      double expected=-result->gyro_rad_s[2]*.0005;
-      assert(fabs(a->yaw_rad-expected)<1e-6 && a->yaw_rad<.00005f);
+      double expected=result->gyro_rad_s[2]*.0005; /* RFU +Z, no sign inversion. */
+      assert(fabs(a->yaw_rad-expected)<1e-6 && fabs(a->yaw_rad)<.00005f);
       assert(filter_input.gyro_rad_s[2]==-1 && result->sample_count==filter_input.sample_count);
     }
     { Bmi088GyroFilterState_t invalid=*result;invalid.valid=0;

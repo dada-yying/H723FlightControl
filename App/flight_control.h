@@ -34,9 +34,9 @@ typedef struct
     uint8_t armed;
     uint32_t control_hz;
     float dt_s;
-    float roll_rad;  /* Body attitude: -imu.pitch, right roll positive. */
-    float pitch_rad; /* Body attitude: +imu.roll, nose down positive. */
-    float yaw_rad;   /* Body attitude: -imu.yaw, right yaw positive. */
+    float roll_rad;  /* RFU X: nose-up positive. */
+    float pitch_rad; /* RFU Y: right-side-down positive. */
+    float yaw_rad;   /* RFU Z: CCW from above positive. */
     float roll_rate_rad_s;
     float pitch_rate_rad_s;
     float yaw_rate_rad_s;
@@ -46,9 +46,9 @@ typedef struct
     float motor_command[4];
     uint32_t saturation_count;
     uint32_t imu_timeout_count;
-    float roll_rate_raw_rad_s; /* Pre-filter body Roll (-gyro_y), telemetry only. */
-    float pitch_rate_raw_rad_s; /* Pre-filter body Pitch (+gyro_x). */
-    float yaw_rate_raw_rad_s; /* Pre-filter body Yaw (-gyro_z). */
+    float roll_rate_raw_rad_s; /* Calibrated unfiltered BMI native X, rad/s. */
+    float pitch_rate_raw_rad_s; /* Calibrated unfiltered BMI native Y, rad/s. */
+    float yaw_rate_raw_rad_s; /* Calibrated unfiltered BMI native Z, rad/s. */
 } FlightControlState_t;
 
 extern volatile FlightControlPidConfig_t g_flight_control_pid;
@@ -77,9 +77,10 @@ typedef struct
     float applied_yaw_r;
 } FlightControlFilter_t;
 extern volatile FlightControlFilter_t g_flight_control_filter;
+/* Legacy ATOM filter Watch layout only; all values stay zero, no filtering.
+ * Active gyro filter parameters are in g_bmi088_gyro_filter. */
 
-/* Read-only Watch diagnostics. Roll/Pitch fixed notch precedes Kalman;
- * Yaw uses Kalman alone. Coefficients follow the averaged fresh-sample rate. */
+/* Legacy Watch layout retained, zero/inactive with BMI088-only feedback. */
 typedef struct
 {
     float center_hz;
@@ -89,13 +90,13 @@ typedef struct
     uint32_t sample_count;
     uint32_t coefficient_update_count;
     uint32_t rate_fault_count;
-    uint8_t active; /* 0 only if sustained sample rate cannot support notch. */
+    uint8_t active; /* Always zero: no additional control-path notch. */
 } FlightControlNotchState_t;
 extern volatile FlightControlNotchState_t g_flight_control_notch;
 
 void FlightControl_Init(void);
 void FlightControl_SetTaskHandle(TaskHandle_t task_handle);
-void FlightControl_NotifyFromISR(void);
+void FlightControl_OnBmi088Update(uint8_t valid); /* BMI task, after publication. */
 void FlightControl_Run(void);
 void FlightControl_OnTaskTimeout(void);
 void FlightControl_GetState(FlightControlState_t *state);

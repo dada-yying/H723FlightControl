@@ -111,7 +111,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_FDCAN3_Init();
+  /* ATOM retired: FDCAN3 reception is not started. */
   MX_USART1_UART_Init();
   MX_UART5_Init();
   Blackbox_Init(HAL_OK);
@@ -120,10 +120,6 @@ int main(void)
   /* USER CODE BEGIN 2 */
   App_Main_Init();
   if (EscPwm_Init() != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (FDCAN3_StartAtomImuReception() != HAL_OK)
   {
     Error_Handler();
   }

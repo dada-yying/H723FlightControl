@@ -18,9 +18,9 @@ typedef struct
 {
     uint16_t channel[RC_SBUS_CHANNEL_COUNT];
     float throttle;
-    float roll_target_rad;
-    float pitch_target_rad;
-    float yaw_rate_target_rad_s;
+    float roll_target_rad; /* RFU X, nose-up positive; CH2 forward is negative. */
+    float pitch_target_rad; /* RFU Y, right-side-down positive; CH1 right positive. */
+    float yaw_rate_target_rad_s; /* RFU Z, CCW positive; CH4 right is negative. */
     float tuning_rate_rad_s;
     RcTuningAxis_t tuning_axis;
     uint8_t tuning_axis_valid;

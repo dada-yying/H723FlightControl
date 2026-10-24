@@ -70,6 +70,8 @@ typedef struct {
      * from a single startup outlier in the existing maxima. */
     uint32_t dma_latency_samples;
     uint64_t dma_irq_total_us, dma_resume_total_us;
+    uint32_t cmd0_attempt_count, cmd0_retry_recovered;
+    uint8_t cmd0_last_rejected_r1;
 } SdSpiDiag_t;
 extern volatile SdSpiDiag_t g_sd_spi_diag;
 int BB_CardPresent(void); /* No detect pin: presence is determined by commands. */

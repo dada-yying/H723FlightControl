@@ -35,7 +35,7 @@ typedef enum {
 
 /* Canonical BMI088 "raw" means CALIBRATED but UNFILTERED physical XYZ values.
  * Register counts and pre-calibration motion values are private temporaries;
- * neither is published or logged. No body remapping/flight-control consumer. */
+ * neither is published or logged. Native XYZ is the RFU control frame. */
 typedef struct {
     float gyro_rad_s[3];
     float accel_m_s2[3];
@@ -43,6 +43,7 @@ typedef struct {
     int16_t temperature_raw;
     uint32_t sample_count;
     uint32_t sample_tick_ms;
+    uint32_t completion_cycle; /* DWT at this sample's SPI completion; control dt. */
     uint32_t age_ms;
     uint8_t has_sample;
     uint8_t valid;

@@ -1,6 +1,7 @@
 /* Based on Damiao CtrBoard-H7_IMU BMI088driver/Middleware and the Bosch
- * BMI088 SPI protocol. Acquisition/logging only; no flight-controller input. */
+ * BMI088 SPI protocol. Acquisition and coherent flight-controller publication. */
 #include "bmi088.h"
+#include "flight_control.h"
 #include "bmi088_attitude.h"
 #include "bmi088_gyro_filter.h"
 #include "bmi088_calibration.h"
@@ -158,6 +159,7 @@ static void Bmi088_Fail(Bmi088Error_t error)
     Bmi088GyroFilter_Invalidate();
     s_read_cycle_seen = 0;
     s_due_tick = HAL_GetTick() + BMI088_RETRY_MS;
+    FlightControl_OnBmi088Update(0U);
 }
 
 static int Bmi088_CheckId(uint8_t accel)
@@ -283,6 +285,7 @@ static void Bmi088_ReadSample(void)
     sample.sample_count = g_bmi088_data.sample_count + 1U;
     sample.sample_tick_ms = HAL_GetTick(); /* Completion time, not sensor time. */
     completion_cycle = DWT->CYCCNT;
+    sample.completion_cycle = completion_cycle;
     sample.has_sample = sample.valid = sample.initialized = 1;
     Bmi088_ApplyCalibration(&sample);
     filter = Bmi088GyroFilter_Compute(&sample, completion_cycle);
@@ -435,6 +438,10 @@ void Bmi088_Process(void)
         after = g_bmi088_stats.timer_irq_count;
         g_bmi088_stats.skipped_trigger_count += (uint32_t)(after - trigger);
         s_consumed_trigger = after;
+        /* Wake high-priority control only after all read bookkeeping, otherwise
+         * its execution would inflate acquisition time and discard TIM7 slots. */
+        if (g_bmi088_stats.stage == BMI088_RUNNING)
+            FlightControl_OnBmi088Update((uint8_t)(g_bmi088_gyro_filter.valid && g_bmi088_attitude_state.valid));
         break;
     }
     default: break;

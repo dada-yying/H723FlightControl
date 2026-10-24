@@ -461,25 +461,42 @@ int BB_CardPresent(void){return 1;}
 void BB_CardIdentity(uint32_t cid[4]){memcpy(cid,card_cid,16);}
 DSTATUS disk_initialize(BYTE drive)
 {
-    uint32_t start=HAL_GetTick(),arg;uint8_t r,ocr[4],csd[16];unsigned i;
+    uint32_t start=HAL_GetTick(),arg,reset_start,ready_start;uint8_t r,ocr[4],csd[16];unsigned i,attempt;
     if(drive)return STA_NOINIT;
     g_sd_spi_diag.version=0x20261020U;g_sd_spi_diag.init_attempts++;
-    g_sd_spi_diag.revision=10; /* Bundle includes BMI088 SPI2 tick-boundary fix. */
+    g_sd_spi_diag.revision=11; /* Bounded local CMD0 recovery before mount backoff. */
     g_sd_spi_diag.stage=SD_INIT_CLOCKS;
     BB_DiskReset();vTaskDelay(pdMS_TO_TICKS(10));
     for(i=0;i<10;i++)spi_byte(0xff);
     g_sd_spi_diag.stage=SD_INIT_CMD0;
-    if(command(0,0)!=1)goto fail;
+    /* A single missed reset response previously triggered the file layer's
+     * 1/2/5-second backoff. Retry only reset (never writes), with CS released
+     * and fresh idle clocks between attempts. Bound both count and wall time;
+     * interrupts remain enabled and each failed attempt yields the task. */
+    reset_start=HAL_GetTick();
+    for(attempt=0;attempt<10U;attempt++){
+        g_sd_spi_diag.cmd0_attempt_count++;
+        r=command(0,0);
+        if(r==1 && !io_failed)break;
+        g_sd_spi_diag.cmd0_last_rejected_r1=r;
+        if(io_failed || (uint32_t)(HAL_GetTick()-reset_start)>=100U)break;
+        deselect();
+        for(i=0;i<10;i++)spi_byte(0xff);
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if(r!=1 || io_failed)goto fail;
+    if(attempt)g_sd_spi_diag.cmd0_retry_recovered++;
     g_sd_spi_diag.stage=SD_INIT_CMD8;
     r=command(8,0x1aa);arg=0;
     if(r==1){for(i=0;i<4;i++)ocr[i]=spi_byte(0xff);if(ocr[2]!=1 || ocr[3]!=0xaa)goto fail;arg=0x40000000;}
     else if(r!=5)goto fail;
     g_sd_spi_diag.stage=SD_INIT_ACMD41;
+    ready_start=HAL_GetTick(); /* ACMD41 owns its full readiness budget. */
     do {
         if(command(55,0)>1)goto fail;
         r=command(41,arg);if(r==0)break;if(r!=1)goto fail;
         deselect();vTaskDelay(pdMS_TO_TICKS(10));
-    }while((uint32_t)(HAL_GetTick()-start)<2000);
+    }while((uint32_t)(HAL_GetTick()-ready_start)<2000);
     g_sd_spi_diag.stage=SD_INIT_OCR;
     if(r || command(58,0)!=0)goto fail;
     for(i=0;i<4;i++)ocr[i]=spi_byte(0xff);

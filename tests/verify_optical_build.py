@@ -2,6 +2,7 @@
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 root = Path(__file__).resolve().parents[1]
 directory = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "MDK-ARM/optical-flow-verified"
@@ -16,7 +17,20 @@ for symbol, expected in (("of_dma", 256), ("tx_dma", 544), ("rx_dma", 544), ("s_
     print(f"{symbol}: AXI SRAM 0x{address:08x}, {size} bytes, aligned")
 for task in ("StartDefaultTask", "StartFlightControlTask", "StartOpticalFlowTask", "StartBmi088Task", "StartBlackboxTask", "StartBlackboxStorageTask"):
     found = re.search(task + r"</STRONG>.*?Max Depth = (\d+)(.*?)</UL>", graph, re.S)
-    assert found and "Cycle" not in found[2], task
+    assert found, task
+    if "Cycle" in found[2]:
+        # AC5 -O3 can label an ordinary zero-frame task loop as a self-cycle.
+        # Verify the emitted code, rather than accepting arbitrary recursion.
+        assert task == "StartFlightControlTask", task
+        assert re.search(task + r"</STRONG>[^\n]*Stack size 0 bytes", graph)
+        disassembly = subprocess.check_output(
+            ["D:/keil5/ARM/ARMCC/Bin/fromelf.exe", "--text", "-c", str(directory / "firmware.axf")],
+            text=True, errors="replace")
+        body = re.search(r"^    StartFlightControlTask\s*\n(.*?)(?=^    [A-Za-z_]|\Z)",
+                         disassembly, re.M | re.S)
+        assert body and re.search(r"\bB\s+StartFlightControlTask\b", body[1])
+        assert not re.search(r"\bBLX?\s+StartFlightControlTask\b|\b(?:V?PUSH|V?POP|SP)\b", body[1])
+        print("StartFlightControlTask: verified zero-stack B loop, not recursive BL")
     depth = int(found[1])
     limit = 4096 if task == "StartBlackboxStorageTask" else 1024
     assert depth < limit, task
@@ -57,7 +71,7 @@ assert "dma_transfer(514)" in sd and "dma_transfer(516)" in sd
 assert "poll_transfer(p,NULL,6)" in sd
 assert "SPI1_SD_EotGuard(&hspi1_sd)" in sd
 assert "short_deadline_rechecks" in sd and "SPI_SR_RXPLVL" in sd
-assert "g_sd_spi_diag.revision=10" in sd
+assert "g_sd_spi_diag.revision=11" in sd
 assert "Bmi088Spi2Poll_Begin(&bmi088_guard,hspi,Timeout,tickstart)" in spi
 assert "Bmi088Spi2Poll_WaitEot(&bmi088_guard,hspi)" in spi
 assert re.search(r"g_bmi088_spi2_poll_diag\s+0x[0-9a-fA-F]+\s+Data", mapping)

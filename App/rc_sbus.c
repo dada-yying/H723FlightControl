@@ -149,15 +149,15 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
     }
     /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw.
      * Measured right-roll/right-yaw increase raw values; forward-pitch decreases.
-     * Targets are radians (roll/pitch) and radians/second (yaw rate). */
+     * RFU targets: CH1 -> +pitch, CH2 forward -> -roll, CH4 right -> -yaw. */
     g_rc_sbus_data.throttle = RcSbus_MapThrottle(g_rc_sbus_data.channel[2]);
-    g_rc_sbus_data.roll_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
+    g_rc_sbus_data.pitch_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
         RcSbus_MapCentered(g_rc_sbus_data.channel[0], RC_SBUS_ROLL_MIN,
                           RC_SBUS_ROLL_CENTER, RC_SBUS_ROLL_MAX) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.pitch_target_rad = RC_SBUS_PITCH_TARGET_SIGN *
+    g_rc_sbus_data.roll_target_rad = -RC_SBUS_PITCH_TARGET_SIGN *
         RcSbus_MapCentered(g_rc_sbus_data.channel[1], RC_SBUS_PITCH_MIN,
                           RC_SBUS_PITCH_CENTER, RC_SBUS_PITCH_MAX) * RC_SBUS_MAX_TILT_RAD;
-    g_rc_sbus_data.yaw_rate_target_rad_s = RC_SBUS_YAW_RATE_TARGET_SIGN *
+    g_rc_sbus_data.yaw_rate_target_rad_s = -RC_SBUS_YAW_RATE_TARGET_SIGN *
         RcSbus_MapCentered(g_rc_sbus_data.channel[3], RC_SBUS_YAW_MIN,
                           RC_SBUS_YAW_CENTER, RC_SBUS_YAW_MAX) * RC_SBUS_MAX_YAW_RATE_RAD_S;
     g_rc_sbus_data.last_valid_tick = HAL_GetTick();
@@ -165,8 +165,8 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
     g_rc_sbus_data.tuning_rate_rad_s = -RcSbus_MapCentered(
         g_rc_sbus_data.channel[9], RC_TUNING_MIN, RC_TUNING_CENTER,
         RC_TUNING_MAX) * RC_TUNING_MAX_RATE;
-    candidate = (g_rc_sbus_data.channel[4] < RC_TUNING_AXIS_LOW_BOUND) ? RC_TUNING_PITCH :
-        ((g_rc_sbus_data.channel[4] > RC_TUNING_AXIS_HIGH_BOUND) ? RC_TUNING_ROLL : RC_TUNING_YAW);
+    candidate = (g_rc_sbus_data.channel[4] < RC_TUNING_AXIS_LOW_BOUND) ? RC_TUNING_ROLL :
+        ((g_rc_sbus_data.channel[4] > RC_TUNING_AXIS_HIGH_BOUND) ? RC_TUNING_PITCH : RC_TUNING_YAW);
     if (candidate != s_axis_candidate) s_axis_confirm_count = 0U;
     s_axis_candidate = candidate;
     if (s_axis_confirm_count < RC_TUNING_CONFIRM_FRAMES) s_axis_confirm_count++;
@@ -175,6 +175,10 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
         g_rc_sbus_data.tuning_axis = candidate;
         g_rc_sbus_data.tuning_axis_valid = 1U;
     }
+    /* Use the accepted axis, not an unconfirmed switch candidate: debounce
+     * must not reverse the still-active axis for the preceding two frames. */
+    if (g_rc_sbus_data.tuning_axis != RC_TUNING_PITCH)
+        g_rc_sbus_data.tuning_rate_rad_s = -g_rc_sbus_data.tuning_rate_rad_s;
     g_rc_sbus_data.valid_frame_count++;
     g_rc_sbus_data.valid = 1U;
 }

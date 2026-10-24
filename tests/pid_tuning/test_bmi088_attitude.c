@@ -16,16 +16,16 @@ static void attitude_reset(uint32_t tick, uint32_t cycle)
     initial_tick = test_tick = tick; simulated_us = 0; test_dwt.CYCCNT = cycle;
 }
 
-/* FRD synthetic gravity/gyro converted back into physical BMI native XYZ. */
-static void pose(float roll, float nose_down, float roll_rate, float nose_down_rate, float yaw_rate)
+/* Independent RFU analytic specific force and body angular velocity. */
+static void pose(float roll, float pitch, float roll_rate, float pitch_rate, float yaw_rate)
 {
-    const float theta = -nose_down;
-    input.accel_m_s2[1] = 9.80665f * sinf(theta);
-    input.accel_m_s2[0] = -9.80665f * sinf(roll) * cosf(theta);
+    const float theta = pitch;
+    input.accel_m_s2[0] = -9.80665f * sinf(theta);
+    input.accel_m_s2[1] = 9.80665f * sinf(roll) * cosf(theta);
     input.accel_m_s2[2] = 9.80665f * cosf(roll) * cosf(theta);
-    input.gyro_rad_s[1] = roll_rate;
-    input.gyro_rad_s[0] = -nose_down_rate;
-    input.gyro_rad_s[2] = -yaw_rate;
+    input.gyro_rad_s[0] = roll_rate;
+    input.gyro_rad_s[1] = pitch_rate;
+    input.gyro_rad_s[2] = yaw_rate;
 }
 
 static void feed(unsigned us)
@@ -80,14 +80,14 @@ int main(void)
         input.accel_m_s2[axis] = sign ? -9.80665f : 9.80665f;
         for (i = 0; i < 120; i++) feed(500);
         assert(g_bmi088_attitude_state.valid);
-        expected.axis.x = input.accel_m_s2[1] / 9.80665f;
-        expected.axis.y = input.accel_m_s2[0] / 9.80665f;
-        expected.axis.z = -input.accel_m_s2[2] / 9.80665f;
+        expected.axis.x = input.accel_m_s2[0] / 9.80665f;
+        expected.axis.y = input.accel_m_s2[1] / 9.80665f;
+        expected.axis.z = input.accel_m_s2[2] / 9.80665f;
         gravity = FusionAhrsGetGravity(&s_ahrs);
         assert(FusionVectorNorm(FusionVectorSubtract(gravity, expected)) < 2e-5f);
         assert(fabsf(FusionQuaternionNormSquared(FusionAhrsGetQuaternion(&s_ahrs)) - 1) < 1e-5f);
     }
-    /* Independent +/- right roll, nose down, right yaw; variable real dt.
+    /* Independent +/- X roll, Y pitch, Z yaw; variable real dt.
      * Accel is an independent analytic gravity fixture, not the filter's q. */
     for (axis = 0; axis < 3; axis++) for (sign = 0; sign < 2; sign++) {
         float angle = 0, rate = sign ? -.7f : .7f;
@@ -119,14 +119,14 @@ int main(void)
         t += us * 1e-6f;
         phi = .2f * sinf(2 * t); theta = .15f * sinf(1.3f * t); psi = ydot * t;
         pdot = .4f * cosf(2 * t); tdot = .195f * cosf(1.3f * t);
-        pose(phi, -theta, 0, 0, 0);
-        input.gyro_rad_s[1] = pdot - ydot * sinf(theta);
-        input.gyro_rad_s[0] = tdot * cosf(phi) + ydot * sinf(phi) * cosf(theta);
-        input.gyro_rad_s[2] = -(-tdot * sinf(phi) + ydot * cosf(phi) * cosf(theta));
+        pose(phi, theta, 0, 0, 0);
+        input.gyro_rad_s[0] = pdot - ydot * sinf(theta);
+        input.gyro_rad_s[1] = tdot * cosf(phi) + ydot * sinf(phi) * cosf(theta);
+        input.gyro_rad_s[2] = -tdot * sinf(phi) + ydot * cosf(phi) * cosf(theta);
         feed(us);
         assert(g_bmi088_attitude_state.valid);
         assert(fabsf(wrapped_error(g_bmi088_attitude_state.roll_rad, phi)) < .003f);
-        assert(fabsf(g_bmi088_attitude_state.pitch_rad + theta) < .003f);
+        assert(fabsf(g_bmi088_attitude_state.pitch_rad - theta) < .003f);
         assert(fabsf(wrapped_error(g_bmi088_attitude_state.yaw_rad, psi)) < .003f);
       }
     }
@@ -135,7 +135,7 @@ int main(void)
     { double filtered_integral=0;
       for (i = 0; i < 8000; i++) {
         pose(0, 0, 0, 0, 1); feed(500);
-        filtered_integral-=g_bmi088_gyro_filter.gyro_rad_s[2]*.0005;
+        filtered_integral+=g_bmi088_gyro_filter.gyro_rad_s[2]*.0005;
       }
       assert(fabsf(wrapped_error(g_bmi088_attitude_state.yaw_rad,(float)filtered_integral))<.001f); }
     Bmi088Attitude_GetState(&state);
@@ -194,7 +194,7 @@ int main(void)
     pose(0, 0, 0, 0, .5f); feed(500); Bmi088Attitude_GetState(&state);
     assert(state.valid && state.age_ms == 0 && fabsf(state.dt_s - .0005f) < 1e-8f);
     /* Real SPI acquisition publishes corrected motion and matching estimate.
-     * It must not bypass calibration or repurpose the control IMU. */
+     * It must not bypass calibration; the control frame is native RFU. */
     model_reset(100); ready(); measurement(136);
     for (axis = 0; axis < 3; axis++) {
         put_i16(0, 2 + 2 * axis, (int)roundf(g_bmi088_calibration.gyro_bias_rad_s[axis] / BMI088_GYRO_SCALE));

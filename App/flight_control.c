@@ -3,7 +3,8 @@
 #include <math.h>
 #include <string.h>
 
-#include "atom_imu.h"
+#include "bmi088_attitude.h"
+#include <float.h>
 #include "esc_pwm.h"
 #include "rc_sbus.h"
 #include "stm32h7xx_hal.h"
@@ -13,44 +14,14 @@
 #define FLIGHT_RATE_INTEGRAL_LIMIT 0.30f
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
-/* Preserve the production Kalman baseline used by both flight-log analyses. */
-#define FLIGHT_FILTER_DEFAULT_Q 0.02f //原为 0.07510204f
-#define FLIGHT_FILTER_DEFAULT_R 1.0f
-#define FLIGHT_FILTER_YAW_DEFAULT_Q 0.015f
-#define FLIGHT_FILTER_YAW_DEFAULT_R 1.0f
-#define FLIGHT_FILTER_MIN_NOISE 0.000001f
-#define FLIGHT_FILTER_MAX_NOISE 1000.0f
-/* flight-log-2 recommendation: exact -3 dB bandwidth, not RBJ alpha/Q. */
-#define FLIGHT_NOTCH_CENTER_HZ 100.0f
-#define FLIGHT_NOTCH_BANDWIDTH_HZ 60.0f
-#define FLIGHT_NOTCH_RATE_WINDOW 128U
-#define FLIGHT_NOTCH_PI 3.14159265358979323846f
-
-typedef struct
-{
-    float x1, x2, y1, y2;
-} FlightNotchHistory_t;
-
-static FlightNotchHistory_t s_notch_history[2];
-static float s_notch_b0, s_notch_b1, s_notch_a2;
-static float s_notch_elapsed_s, s_notch_window_s, s_notch_design_hz;
-static uint32_t s_notch_intervals;
-static uint8_t s_notch_active;
+/* Legacy Watch blocks remain zero/inactive; BMI088 owns the only gyro LPF. */
 volatile FlightControlNotchState_t g_flight_control_notch;
-
 volatile FlightControlPidConfig_t g_flight_control_pid;
 volatile FlightControlState_t g_flight_control_state;
 volatile FlightControlTuning_t g_flight_control_tuning;
 volatile FlightControlFilter_t g_flight_control_filter;
-static float s_filter_q;
-static float s_filter_r;
-static float s_filter_yaw_q;
-static float s_filter_yaw_r;
-static float s_filtered_rate[3];
-static float s_filter_covariance[3];
-static uint32_t s_filter_rx_count;
-static uint8_t s_filter_seen_sample;
-static uint8_t s_filter_initialized;
+static uint32_t s_sample_count, s_attitude_epoch;
+static uint8_t s_publish_divider;
 static uint8_t s_tuning_active;
 static uint8_t s_previous_armed;
 static RcTuningAxis_t s_selected_axis;
@@ -110,200 +81,26 @@ static void FlightControl_ResetController(void)
     s_output_saturated = 0U;
 }
 
-static void FlightControl_NotchCoefficients(float sample_hz)
+/* Called by the BMI task after coherent publication and acquisition bookkeeping.
+ * Notify every two successful reads; faults wake control immediately. */
+void FlightControl_OnBmi088Update(uint8_t valid)
 {
-    /* Keep the complete rejection band comfortably below Nyquist. If the
-     * sustained update rate is too low, use Kalman alone until it recovers. */
-    s_notch_active = (sample_hz > 2.0f * (FLIGHT_NOTCH_CENTER_HZ +
-                       FLIGHT_NOTCH_BANDWIDTH_HZ)) ? 1U : 0U;
-    s_notch_design_hz = sample_hz;
-    if (s_notch_active != 0U)
-    {
-        float beta = tanf(FLIGHT_NOTCH_PI * FLIGHT_NOTCH_BANDWIDTH_HZ / sample_hz);
-        s_notch_b0 = 1.0f / (1.0f + beta);
-        s_notch_b1 = -2.0f * s_notch_b0 *
-            cosf(2.0f * FLIGHT_NOTCH_PI * FLIGHT_NOTCH_CENTER_HZ / sample_hz);
-        s_notch_a2 = 2.0f * s_notch_b0 - 1.0f;
-    }
-    g_flight_control_notch.applied_sample_hz = sample_hz;
-    g_flight_control_notch.active = s_notch_active;
-    g_flight_control_notch.coefficient_update_count++;
+    if (valid && ++s_publish_divider < 2U) return;
+    s_publish_divider = 0U;
+    if (s_flight_task_handle != NULL) xTaskNotifyGive(s_flight_task_handle);
 }
 
-static void FlightControl_NotchReset(void)
+static uint8_t FlightControl_Finite(float value)
 {
-    s_notch_elapsed_s = 0.0f;
-    s_notch_window_s = 0.0f;
-    s_notch_intervals = 0U;
-    g_flight_control_notch.sample_hz = 1.0f / FLIGHT_DEFAULT_DT_S;
-    FlightControl_NotchCoefficients(1.0f / FLIGHT_DEFAULT_DT_S);
-}
-
-static void FlightControl_NotchMeasurePeriod(void)
-{
-    s_notch_window_s += s_notch_elapsed_s;
-    s_notch_intervals++;
-    if (s_notch_intervals >= FLIGHT_NOTCH_RATE_WINDOW)
-    {
-        float hz = (float)s_notch_intervals / s_notch_window_s;
-        uint8_t active = (hz > 2.0f * (FLIGHT_NOTCH_CENTER_HZ +
-                            FLIGHT_NOTCH_BANDWIDTH_HZ)) ? 1U : 0U;
-        g_flight_control_notch.sample_hz = hz;
-        /* Average fresh-sample intervals, not logger throughput. A 1% deadband
-         * avoids coefficient modulation by ordinary task scheduling jitter. */
-        if ((fabsf(hz - s_notch_design_hz) > 0.01f * s_notch_design_hz) ||
-            (active != s_notch_active))
-        {
-            if ((active == 0U) && (s_notch_active != 0U))
-                g_flight_control_notch.rate_fault_count++;
-            FlightControl_NotchCoefficients(hz);
-        }
-        s_notch_window_s = 0.0f;
-        s_notch_intervals = 0U;
-    }
-}
-
-static float FlightControl_NotchApply(uint32_t axis, float input, uint8_t seed)
-{
-    FlightNotchHistory_t *h = &s_notch_history[axis];
-    float output;
-    if ((seed != 0U) || (s_notch_active == 0U))
-    {
-        h->x1 = h->x2 = h->y1 = h->y2 = input;
-        return input;
-    }
-    output = s_notch_b0 * input + s_notch_b1 * h->x1 + s_notch_b0 * h->x2
-             - s_notch_b1 * h->y1 - s_notch_a2 * h->y2;
-    h->x2 = h->x1;
-    h->x1 = input;
-    h->y2 = h->y1;
-    h->y1 = output;
-    return output;
-}
-
-/* Task-only scalar random-walk Kalman filters, rad/s. No attitude/bias fusion.
- * Each axis owns x/P; Roll/Pitch share Q/R, Yaw has its own pair.
- * Independent of PID resets. */
-/* 卡尔曼滤波 */
-static void FlightControl_FilterGyro(const AtomImuData_t *imu, float dt)
-{
-    float requested_q;
-    float requested_r;
-    float raw[3];
-    uint32_t axis;
-
-    if (imu->gyro_valid == 0U)
-    {
-        s_filter_initialized = 0U;
-        return;
-    }
-    /* Include duplicate-call intervals in the next fresh-sample period, but
-     * never iterate the notch or its period estimator on a cached sample. */
-    s_notch_elapsed_s += dt;
-    if ((s_filter_seen_sample != 0U) && (imu->gyro_rx_count == s_filter_rx_count))
-        return;
-    if (s_filter_initialized == 0U)
-        FlightControl_NotchReset();
-    else
-        FlightControl_NotchMeasurePeriod();
-    s_notch_elapsed_s = 0.0f;
-    /* Read once per fresh sample. Reject the whole pair if either is invalid.
-     * Ordered bounds also reject NaN and either infinity. */
-    requested_q = g_flight_control_filter.q;
-    requested_r = g_flight_control_filter.r;
-    if ((requested_q >= FLIGHT_FILTER_MIN_NOISE) &&
-        (requested_q <= FLIGHT_FILTER_MAX_NOISE) &&
-        (requested_r >= FLIGHT_FILTER_MIN_NOISE) &&
-        (requested_r <= FLIGHT_FILTER_MAX_NOISE))
-    {
-        s_filter_q = requested_q;
-        s_filter_r = requested_r;
-    }
-    g_flight_control_filter.applied_q = s_filter_q;
-    g_flight_control_filter.applied_r = s_filter_r;
-    /* Validate Yaw independently: a rejected pair cannot block the other group. */
-    requested_q = g_flight_control_filter.yaw_q;
-    requested_r = g_flight_control_filter.yaw_r;
-    if ((requested_q >= FLIGHT_FILTER_MIN_NOISE) &&
-        (requested_q <= FLIGHT_FILTER_MAX_NOISE) &&
-        (requested_r >= FLIGHT_FILTER_MIN_NOISE) &&
-        (requested_r <= FLIGHT_FILTER_MAX_NOISE))
-    {
-        s_filter_yaw_q = requested_q;
-        s_filter_yaw_r = requested_r;
-    }
-    g_flight_control_filter.applied_yaw_q = s_filter_yaw_q;
-    g_flight_control_filter.applied_yaw_r = s_filter_yaw_r;
-    s_filter_seen_sample = 1U;
-    s_filter_rx_count = imu->gyro_rx_count;
-    /* Preserve the confirmed PID/telemetry signs and axis mapping.
-     * CAN decoding and Euler-angle mapping remain unchanged. */
-    raw[0] = -imu->gyro_y;
-    raw[1] = imu->gyro_x; /* Pitch: nose-down rate positive. */
-    raw[2] = -imu->gyro_z;
-    g_flight_control_state.roll_rate_raw_rad_s = raw[0];
-    g_flight_control_state.pitch_rate_raw_rad_s = raw[1];
-    g_flight_control_state.yaw_rate_raw_rad_s = raw[2];
-    raw[0] = FlightControl_NotchApply(0U, raw[0], (uint8_t)(s_filter_initialized == 0U));
-    raw[1] = FlightControl_NotchApply(1U, raw[1], (uint8_t)(s_filter_initialized == 0U));
-    g_flight_control_notch.sample_count++;
-    for (axis = 0U; axis < 3U; axis++)
-    {
-        const float q = (axis == 2U) ? s_filter_yaw_q : s_filter_q;
-        const float r = (axis == 2U) ? s_filter_yaw_r : s_filter_r;
-        const float q_step = q * (dt / FLIGHT_DEFAULT_DT_S);
-        if (s_filter_initialized == 0U)
-        {
-            s_filtered_rate[axis] = raw[axis];
-            /* Stable positive solution of P^2 + Q*P - Q*R = 0,
-             * seeded from this axis group's parameters. */
-            s_filter_covariance[axis] = (2.0f * q_step * r) /
-                (sqrtf(q_step * q_step + 4.0f * q_step * r) + q_step);
-            g_flight_control_filter.gain[axis] = 1.0f;
-        }
-        else
-        {
-            const float predicted = s_filter_covariance[axis] + q_step;
-            const float gain = predicted / (predicted + r);
-            const float remaining = 1.0f - gain;
-            s_filtered_rate[axis] += gain * (raw[axis] - s_filtered_rate[axis]);
-            /* Joseph form preserves nonnegative covariance at extreme Q/R. */
-            s_filter_covariance[axis] = remaining * remaining * predicted +
-                                       gain * gain * r;
-            g_flight_control_filter.gain[axis] = gain;
-        }
-    }
-    s_filter_initialized = 1U;
-    g_flight_control_state.roll_rate_rad_s = s_filtered_rate[0];
-    g_flight_control_state.pitch_rate_rad_s = s_filtered_rate[1];
-    g_flight_control_state.yaw_rate_rad_s = s_filtered_rate[2];
+    return (uint8_t)(value <= FLT_MAX && value >= -FLT_MAX);
 }
 
 void FlightControl_Init(void)
 {
     (void)memset((void *)&g_flight_control_notch, 0, sizeof(g_flight_control_notch));
-    (void)memset(s_notch_history, 0, sizeof(s_notch_history));
-    g_flight_control_notch.center_hz = FLIGHT_NOTCH_CENTER_HZ;
-    g_flight_control_notch.bandwidth_hz = FLIGHT_NOTCH_BANDWIDTH_HZ;
-    FlightControl_NotchReset();
-    s_filter_q = FLIGHT_FILTER_DEFAULT_Q;
-    s_filter_r = FLIGHT_FILTER_DEFAULT_R;
-    s_filter_yaw_q = FLIGHT_FILTER_YAW_DEFAULT_Q;
-    s_filter_yaw_r = FLIGHT_FILTER_YAW_DEFAULT_R;
     (void)memset((void *)&g_flight_control_filter, 0, sizeof(g_flight_control_filter));
-    g_flight_control_filter.q = s_filter_q;
-    g_flight_control_filter.r = s_filter_r;
-    g_flight_control_filter.applied_q = s_filter_q;
-    g_flight_control_filter.applied_r = s_filter_r;
-    g_flight_control_filter.yaw_q = s_filter_yaw_q;
-    g_flight_control_filter.yaw_r = s_filter_yaw_r;
-    g_flight_control_filter.applied_yaw_q = s_filter_yaw_q;
-    g_flight_control_filter.applied_yaw_r = s_filter_yaw_r;
-    s_filter_initialized = 0U;
-    s_filter_seen_sample = 0U;
-    s_filter_rx_count = 0U;
-    (void)memset(s_filtered_rate, 0, sizeof(s_filtered_rate));
-    (void)memset(s_filter_covariance, 0, sizeof(s_filter_covariance));
+    s_publish_divider = 0U;
+    s_sample_count = s_attitude_epoch = 0U;
     (void)memset((void *)&g_flight_control_tuning, 0, sizeof(g_flight_control_tuning));
     s_tuning_active = 0U;
     s_previous_armed = 0U;
@@ -332,40 +129,16 @@ void FlightControl_SetTaskHandle(TaskHandle_t task_handle)
     s_flight_task_handle = task_handle;
 }
 
-/* 从ISR通知飞行控制任务 */
-void FlightControl_NotifyFromISR(void)
-{
-    BaseType_t woken = pdFALSE;
-    if (s_flight_task_handle != NULL)
-    {
-        vTaskNotifyGiveFromISR(s_flight_task_handle, &woken);
-        portYIELD_FROM_ISR(woken);
-    }
-}
-
-/* 计算时间间隔 */
-static float FlightControl_DeltaSeconds(void)
-{
-    uint32_t now = DWT->CYCCNT;
-    uint32_t delta;
-    if (s_have_cycle == 0U)
-    {
-        s_last_cycle = now;
-        s_have_cycle = 1U;
-        return FLIGHT_DEFAULT_DT_S;
-    }
-    delta = now - s_last_cycle;
-    s_last_cycle = now;
-    if ((SystemCoreClock == 0U) || (delta == 0U)) return FLIGHT_DEFAULT_DT_S;
-    return FlightControl_Clamp((float)delta / (float)SystemCoreClock,
-                               0.0002f, 0.005f);
-}
-
+/* BMI sample completion cycles, not task wake time, define control dt. */
 void FlightControl_Run(void)
 {
-    AtomImuData_t imu;
+    Bmi088Data_t imu;
+    Bmi088GyroFilterState_t filter;
+    Bmi088AttitudeState_t attitude;
+    uint8_t valid;
+    unsigned axis;
     RcSbusData_t rc;
-    float dt = FlightControl_DeltaSeconds();
+    float dt = FLIGHT_DEFAULT_DT_S;
     float roll_target_rate;
     float pitch_target_rate;
     float roll_output = 0.0f;
@@ -375,17 +148,49 @@ void FlightControl_Run(void)
     uint32_t motor_index;
     uint32_t now = HAL_GetTick();
 
-    AtomImu_GetData(&imu);
+    Bmi088_GetSnapshotWithFilter(&imu, &filter, &attitude);
     RcSbus_GetData(&rc);
-    g_flight_control_state.dt_s = dt;
-    g_flight_control_state.control_hz = (uint32_t)(1.0f / dt + 0.5f);
-    /* Confirmed airframe attitude: right roll, nose down, right yaw positive.
-     * Keep native CAN fields intact; PID and telemetry share this mapping. */
-    g_flight_control_state.roll_rad = -imu.pitch;
-    g_flight_control_state.pitch_rad = imu.roll;
-    g_flight_control_state.yaw_rad = -imu.yaw;
-    FlightControl_FilterGyro(&imu, dt);
-    g_flight_control_state.imu_valid = (imu.gyro_valid != 0U) ? 1U : 0U;
+    valid = (uint8_t)(imu.valid && imu.initialized && imu.has_sample &&
+        filter.valid && filter.initialized && attitude.valid && attitude.initialized &&
+        imu.age_ms < FLIGHT_IMU_TIMEOUT_MS &&
+        filter.sample_count == imu.sample_count && attitude.sample_count == imu.sample_count &&
+        filter.sample_tick_ms == imu.sample_tick_ms && attitude.sample_tick_ms == imu.sample_tick_ms);
+    for (axis = 0U; axis < 3U; axis++)
+        if (!FlightControl_Finite(imu.gyro_rad_s[axis]) ||
+            !FlightControl_Finite(filter.gyro_rad_s[axis])) valid = 0U;
+    if (!FlightControl_Finite(attitude.roll_rad) || !FlightControl_Finite(attitude.pitch_rad) ||
+        !FlightControl_Finite(attitude.yaw_rad)) valid = 0U;
+    if (valid && s_have_cycle && attitude.epoch == s_attitude_epoch &&
+        imu.sample_count == s_sample_count) {
+        FlightControl_OnTaskTimeout();
+        return; /* Cached sample cannot advance PID or keep its watchdog alive. */
+    }
+    if (valid && s_have_cycle && attitude.epoch == s_attitude_epoch) {
+        dt = SystemCoreClock ? (float)(uint32_t)(imu.completion_cycle - s_last_cycle) /
+            (float)SystemCoreClock : 0.0f;
+        if (!(dt >= 0.0002f && dt < 0.010f)) valid = 0U;
+    } else {
+        FlightControl_ResetController();
+    }
+    if (valid) {
+        s_last_cycle = imu.completion_cycle;
+        s_sample_count = imu.sample_count;
+        s_attitude_epoch = attitude.epoch;
+        s_have_cycle = 1U;
+        g_flight_control_state.dt_s = dt;
+        g_flight_control_state.control_hz = (uint32_t)(1.0f / dt + 0.5f);
+        /* RFU: native BMI XYZ; no second notch/Kalman/axis remapping. */
+        g_flight_control_state.roll_rad = attitude.roll_rad;
+        g_flight_control_state.pitch_rad = attitude.pitch_rad;
+        g_flight_control_state.yaw_rad = attitude.yaw_rad;
+        g_flight_control_state.roll_rate_raw_rad_s = imu.gyro_rad_s[0];
+        g_flight_control_state.pitch_rate_raw_rad_s = imu.gyro_rad_s[1];
+        g_flight_control_state.yaw_rate_raw_rad_s = imu.gyro_rad_s[2];
+        g_flight_control_state.roll_rate_rad_s = filter.gyro_rad_s[0];
+        g_flight_control_state.pitch_rate_rad_s = filter.gyro_rad_s[1];
+        g_flight_control_state.yaw_rate_rad_s = filter.gyro_rad_s[2];
+    } else s_have_cycle = 0U;
+    g_flight_control_state.imu_valid = valid;
     g_flight_control_state.rc_valid = (rc.valid != 0U && rc.failsafe == 0U) ? 1U : 0U;
     g_flight_control_state.armed = EscPwm_IsArmed();
 
@@ -421,11 +226,13 @@ void FlightControl_Run(void)
     g_flight_control_tuning.input_rate_rad_s = rc.tuning_rate_rad_s;
 
     /* 检查飞行控制状态，IMU无效、RC无效、failsafe、超时则清零目标 */
-    if ((imu.gyro_valid == 0U) || (rc.valid == 0U) || (rc.failsafe != 0U) ||
+    if ((valid == 0U) || (rc.valid == 0U) || (rc.failsafe != 0U) ||
         ((now - rc.last_valid_tick) >= 100U))
     {
         EscPwmInhibitReason_t reason = ESC_PWM_INHIBIT_RC_INVALID;
-        if (rc.failsafe != 0U)
+        if (!valid)
+            reason = ESC_PWM_INHIBIT_IMU_TIMEOUT;
+        else if (rc.failsafe != 0U)
             reason = ESC_PWM_INHIBIT_FAILSAFE;
         else if ((now - rc.last_valid_tick) >= 100U)
             reason = ESC_PWM_INHIBIT_RC_TIMEOUT;
@@ -492,10 +299,10 @@ void FlightControl_Run(void)
 
     /* M1=left rear CCW, M2=right rear CW, M3=right front CCW, M4=left front CW. */
     /* 四轴混控 */
-    motor[0] = rc.throttle + pitch_output + roll_output + yaw_output;
-    motor[1] = rc.throttle + pitch_output - roll_output - yaw_output;
-    motor[2] = rc.throttle - pitch_output - roll_output + yaw_output;
-    motor[3] = rc.throttle - pitch_output + roll_output - yaw_output;
+    motor[0] = rc.throttle - roll_output + pitch_output - yaw_output;
+    motor[1] = rc.throttle - roll_output - pitch_output + yaw_output;
+    motor[2] = rc.throttle + roll_output - pitch_output - yaw_output;
+    motor[3] = rc.throttle + roll_output + pitch_output + yaw_output;
     s_output_saturated = 0U;
     for (motor_index = 0U; motor_index < 4U; motor_index++)
     {
@@ -518,7 +325,7 @@ void FlightControl_OnTaskTimeout(void)
 {
     if ((HAL_GetTick() - s_last_control_tick) >= FLIGHT_IMU_TIMEOUT_MS)
     {
-        s_filter_initialized = 0U;
+        s_have_cycle = 0U;
         FlightControl_ResetController();
         EscPwm_ForceMinimum(ESC_PWM_INHIBIT_IMU_TIMEOUT);
         s_previous_armed = 0U;

@@ -1,228 +1,24 @@
-/* Exercise actual FlightControl_Run/FilterGyro with the existing HAL fixtures. */
-#define main tuning_regression_main
+/* Regression for the retired ATOM cascade: no second filter may affect BMI. */
+#define CONTROL_FIXTURE_ONLY
 #include "test_tuning.c"
-#undef main
-
-#define TEST_PI 3.14159265358979323846
-
-typedef struct { double z1,z2; } RefNotch;
-static double ref_notch(RefNotch *s,double x,double fs,int seed)
-{
-    /* Transposed direct form II, independent of production's direct form I. */
-    double g=1/(1+tan(TEST_PI*60/fs));
-    double b1=-2*g*cos(2*TEST_PI*100/fs),a2=2*g-1,y;
-    if(seed) { s->z1=(1-g)*x; s->z2=(g-a2)*x; }
-    y=g*x+s->z1;
-    s->z1=b1*x-b1*y+s->z2;
-    s->z2=g*x-a2*y;
-    return y;
-}
-
-static void init_notch_test(void)
-{
-    RcSbus_Init(); FlightControl_Init(); test_armed=0;
-    /* The double reference below uses explicit test parameters. Production
-     * Q/R are user tuning values and may legitimately differ from .015/1. */
-    g_flight_control_filter.q=.015f; g_flight_control_filter.r=1;
-    g_flight_control_filter.yaw_q=.015f; g_flight_control_filter.yaw_r=1;
-    memset(&test_imu,0,sizeof(test_imu)); test_imu.gyro_valid=1;
-}
-
-static void test_reference_cascade(void)
-{
-    RefNotch ref[2]={{0}};
-    double x[3]={0},p[3]={0},measurement[3],raw[3];
-    unsigned n,axis;
-    init_notch_test();
-    near_value(s_notch_b0,0.8397996491122632f);
-    near_value(s_notch_b1,-1.3588243760038774f);
-    near_value(s_notch_a2,0.6795992982245265f);
-    for(n=0;n<8000;n++) {
-        /* DC, positive/negative steps, impulse and independent sinusoids. */
-        raw[0]=2.5+(n>=2000 ? -4.0 : 0)+sin(2*TEST_PI*100*n/1000);
-        raw[1]=-1.3+0.3*sin(2*TEST_PI*5*n/1000)+(n==120 ? 3 : 0);
-        raw[2]=sin(2*TEST_PI*100*n/1000);
-        test_imu.gyro_y=-(float)raw[0]; test_imu.gyro_x=(float)raw[1];
-        test_imu.gyro_z=-(float)raw[2];
-        for(axis=0;axis<3;axis++) {
-            measurement[axis]=axis<2 ? ref_notch(&ref[axis],(float)raw[axis],1000,n==0) : (float)raw[axis];
-            if(n==0) { x[axis]=measurement[axis]; p[axis]=(sqrt(.015*.015+4*.015)-.015)/2; }
-            else reference_kalman(&x[axis],&p[axis],measurement[axis],.015,1,.001);
-        }
-        run();
-        for(axis=0;axis<3;axis++) assert(fabs(s_filtered_rate[axis]-x[axis])<0.00003);
-        near_value(g_flight_control_state.roll_rate_raw_rad_s,(float)raw[0]);
-        near_value(g_flight_control_state.pitch_rate_raw_rad_s,(float)raw[1]);
-        near_value(g_flight_control_state.yaw_rate_raw_rad_s,(float)raw[2]);
-    }
-    assert(g_flight_control_notch.coefficient_update_count==2); /* init + first seed */
-    puts("PASS: 8000-sample independent double notch/Kalman reference; raw preservation; Yaw unchanged");
-}
-
-static void test_frequency_response(void)
-{
-    const float fs_list[]={500,800,1000,2000};
-    const float freq_list[]={5,73.817474f,100,133.817474f,200};
-    unsigned s,f,n;
-    for(s=0;s<4;s++) for(f=0;f<5;f++) {
-        double in_power=0,out_power=0;
-        float fs=fs_list[s],freq=freq_list[f];
-        init_notch_test();
-        for(n=0;n<12000;n++) {
-            float input=(float)sin(2*TEST_PI*freq*n/fs);
-            test_imu.gyro_y=-input; test_imu.gyro_x=2.0f;
-            test_imu.gyro_rx_count++;
-            FlightControl_FilterGyro(&test_imu,1/fs);
-            if(n>=2000) { in_power+=input*input; out_power+=s_notch_history[0].y1*s_notch_history[0].y1; }
-            near_value(s_filtered_rate[1],2); near_value(s_filtered_rate[2],0);
-        }
-        assert(fabs(g_flight_control_notch.applied_sample_hz-fs)<0.02);
-        if(freq==100) assert(sqrt(out_power/in_power)<0.0001);
-        if(freq==5) assert(sqrt(out_power/in_power)>0.99);
-        if(s==2 && (f==1 || f==3)) assert(fabs(sqrt(out_power/in_power)-sqrt(.5))<.001);
-    }
-    puts("PASS: notch center rejection >80 dB at 500/800/1000/2000 Hz; 5 Hz passband; exact 60 Hz -3 dB width; axis isolation");
-}
-
-static void test_notch_lifecycle(void)
-{
-    FlightNotchHistory_t held[2];
-    uint32_t count,n;
-    init_notch_test();
-    test_imu.gyro_y=-1; run(); test_imu.gyro_y=-3; run();
-    memcpy(held,s_notch_history,sizeof(held)); count=g_flight_control_notch.sample_count;
-    FlightControl_ResetController();
-    assert(memcmp(held,s_notch_history,sizeof(held))==0);
-    test_imu.gyro_y=99; FlightControl_Run();
-    assert(memcmp(held,s_notch_history,sizeof(held))==0);
-    assert(g_flight_control_notch.sample_count==count);
-    test_tick+=11; FlightControl_OnTaskTimeout();
-    FlightControl_Run(); assert(!s_filter_initialized);
-    test_imu.gyro_y=-4; test_imu.gyro_x=-2; run();
-    near_value(s_filtered_rate[0],4); near_value(s_filtered_rate[1],-2);
-    near_value(s_notch_history[0].x1,4); near_value(s_notch_history[0].y2,4);
-    test_imu.gyro_valid=0; run();
-    test_imu.gyro_valid=1; test_imu.gyro_x=7; run();
-    near_value(s_filtered_rate[1],7);
-    /* Averaged fresh-sample interval includes duplicate calls, not iterations. */
-    init_notch_test(); run();
-    for(n=0;n<128;n++) {
-        FlightControl_FilterGyro(&test_imu,0.001f);
-        test_imu.gyro_rx_count++;
-        FlightControl_FilterGyro(&test_imu,0.001f);
-    }
-    assert(g_flight_control_notch.sample_count==129);
-    assert(fabs(g_flight_control_notch.sample_hz-500)<0.02);
-    /* Sustained undersampling uses Kalman alone and restores notch on recovery. */
-    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; FlightControl_FilterGyro(&test_imu,.005f); }
-    assert(!g_flight_control_notch.active && g_flight_control_notch.rate_fault_count==1);
-    for(n=0;n<128;n++) { test_imu.gyro_rx_count++; FlightControl_FilterGyro(&test_imu,.001f); }
-    assert(g_flight_control_notch.active);
-    /* Alternating scheduler jitter does not modulate coefficients. */
-    init_notch_test(); run(); count=g_flight_control_notch.coefficient_update_count;
-    for(n=0;n<1024;n++) {
-        test_imu.gyro_rx_count++;
-        FlightControl_FilterGyro(&test_imu,n%2 ? .0011f : .0009f);
-    }
-    assert(g_flight_control_notch.coefficient_update_count==count);
-    test_imu.gyro_rx_count=0xffffffffU; FlightControl_FilterGyro(&test_imu,.001f);
-    test_imu.gyro_rx_count=0U; FlightControl_FilterGyro(&test_imu,.001f);
-    assert(s_filter_rx_count==0U);
-    puts("PASS: duplicate samples, PID resets, timeout/invalid recovery, averaged cadence, low-rate fallback, jitter and count wrap");
-}
-
-static void test_yaw_parameter_isolation(void)
-{
-    float baseline[120][6];
-    unsigned pass,n,axis;
-    double difference[2]={0};
-    for(pass=0;pass<3;pass++) {
-        double yaw_x=0,yaw_p=0;
-        init_notch_test();
-        for(n=0;n<120;n++) {
-            float dt=n%2 ? .0015f : .0005f;
-            double q,r,q_step;
-            test_imu.gyro_x=(float)cos(n*.17);
-            test_imu.gyro_y=(float)sin(n*.19);
-            test_imu.gyro_z=(float)cos(n*.23);
-            if(n==40 && pass==1) { g_flight_control_filter.q=.2f; g_flight_control_filter.r=.7f; }
-            if(n==40 && pass==2) { g_flight_control_filter.yaw_q=.003f; g_flight_control_filter.yaw_r=1.7f; }
-            q=g_flight_control_filter.yaw_q; r=g_flight_control_filter.yaw_r;
-            q_step=q*dt/.001;
-            if(n==0) {
-                yaw_x=-test_imu.gyro_z;
-                yaw_p=(sqrt(q_step*q_step+4*q_step*r)-q_step)/2;
-            } else reference_kalman(&yaw_x,&yaw_p,-test_imu.gyro_z,q,r,dt);
-            test_imu.gyro_rx_count++;
-            FlightControl_FilterGyro(&test_imu,dt);
-            assert(fabs(s_filtered_rate[2]-yaw_x)<.00001);
-            assert(fabs(s_filter_covariance[2]-yaw_p)<.00001);
-            for(axis=0;axis<3;axis++) {
-                if(pass==0) {
-                    baseline[n][axis]=s_filtered_rate[axis];
-                    baseline[n][axis+3]=s_filter_covariance[axis];
-                } else if((pass==1 && axis==2) || (pass==2 && axis<2)) {
-                    assert(s_filtered_rate[axis]==baseline[n][axis]);
-                    assert(s_filter_covariance[axis]==baseline[n][axis+3]);
-                } else difference[pass-1]+=fabs(s_filtered_rate[axis]-baseline[n][axis]);
-            }
-        }
-    }
-    assert(difference[0]>.1 && difference[1]>.1);
-    /* Invalid pairs reject independently, including when the other group changes. */
-    {
-        const float invalid[]={0,-1,1e-7f,1001,NAN,INFINITY,-INFINITY};
-        init_notch_test(); run();
-        for(n=0;n<sizeof(invalid)/sizeof(invalid[0]);n++) {
-            for(axis=0;axis<2;axis++) {
-                float held_q=s_filter_yaw_q,held_r=s_filter_yaw_r;
-                g_flight_control_filter.yaw_q=axis==0 ? invalid[n] : .4f;
-                g_flight_control_filter.yaw_r=axis==1 ? invalid[n] : 2;
-                g_flight_control_filter.q=.03f+n*.001f;
-                g_flight_control_filter.r=.8f;
-                run();
-                near_value(g_flight_control_filter.applied_q,g_flight_control_filter.q);
-                near_value(g_flight_control_filter.applied_yaw_q,held_q);
-                near_value(g_flight_control_filter.applied_yaw_r,held_r);
-                g_flight_control_filter.q=axis==0 ? invalid[n] : .2f;
-                g_flight_control_filter.r=axis==1 ? invalid[n] : .9f;
-                g_flight_control_filter.yaw_q=.01f+n*.001f;
-                g_flight_control_filter.yaw_r=1.2f;
-                run();
-                near_value(g_flight_control_filter.applied_q,.03f+n*.001f);
-                near_value(g_flight_control_filter.applied_r,.8f);
-                near_value(g_flight_control_filter.applied_yaw_q,g_flight_control_filter.yaw_q);
-                near_value(g_flight_control_filter.applied_yaw_r,1.2f);
-            }
-        }
-    }
-    g_flight_control_filter.yaw_q=.08f; g_flight_control_filter.yaw_r=.6f;
-    {
-        float held_q=s_filter_yaw_q,p=s_filter_covariance[2],x=s_filtered_rate[2];
-        FlightControl_FilterGyro(&test_imu,.001f); /* no fresh sample */
-        near_value(s_filter_yaw_q,held_q); near_value(s_filter_covariance[2],p);
-        near_value(s_filtered_rate[2],x);
-    }
-    test_tick+=11; FlightControl_OnTaskTimeout();
-    test_imu.gyro_z=-2; run();
-    near_value(s_filtered_rate[2],2);
-    near_value(s_filter_covariance[2],(sqrtf(.08f*.08f+4*.08f*.6f)-.08f)/2);
-    near_value(g_flight_control_filter.applied_yaw_q,.08f);
-    test_imu.gyro_valid=0; run();
-    test_imu.gyro_valid=1; test_imu.gyro_z=3; run();
-    near_value(s_filtered_rate[2],-3);
-    near_value(g_flight_control_filter.applied_yaw_r,.6f);
-    FlightControl_Init();
-    near_value(g_flight_control_filter.yaw_q,.015f);
-    near_value(g_flight_control_filter.yaw_r,1);
-    puts("PASS: independent RP/Yaw Q/R, exact unaffected-axis histories, variable-dt reference, invalid pairs, fresh gating and recovery");
-}
-
 int main(void)
 {
-    test_reference_cascade();
-    test_frequency_response();
-    test_notch_lifecycle();
-    test_yaw_parameter_isolation();
+    unsigned i;
+    reset_control();
+    for(i=0;i<100;i++) {
+        float value=(i&1U) ? -.75f : .75f;
+        source(1000);
+        g_bmi088_gyro_filter.gyro_rad_s[0]=value;
+        g_bmi088_gyro_filter.gyro_rad_s[1]=-value;
+        g_bmi088_gyro_filter.gyro_rad_s[2]=value*.5f;
+        g_flight_control_filter.q=NAN; g_flight_control_filter.r=INFINITY;
+        FlightControl_Run();
+        near_value(g_flight_control_state.roll_rate_rad_s,value);
+        near_value(g_flight_control_state.pitch_rate_rad_s,-value);
+        near_value(g_flight_control_state.yaw_rate_rad_s,value*.5f);
+        FlightControl_ResetController();
+        assert(!g_flight_control_notch.active && !g_flight_control_notch.sample_count);
+    }
+    puts("PASS BMI LPF output used exactly; legacy notch/Kalman Watch has no effect");
     return 0;
 }

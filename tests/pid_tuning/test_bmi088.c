@@ -6,6 +6,19 @@
 #include "../../App/bmi088_attitude.c"
 #include "../../App/bmi088.c"
 
+#ifndef BMI_FLIGHT_INTEGRATION_TEST
+static unsigned flight_publish_calls;
+void FlightControl_OnBmi088Update(uint8_t valid)
+{
+    if (valid) {
+        assert(g_bmi088_data.sample_count == g_bmi088_attitude_state.sample_count);
+        assert(g_bmi088_data.sample_count == g_bmi088_gyro_filter.sample_count);
+        assert(test_critical_depth == 0);
+    }
+    flight_publish_calls++;
+}
+#endif
+
 static uint8_t registers[2][128], accel_spi_mode;
 static unsigned fail_call;
 static HAL_StatusTypeDef fail_status;

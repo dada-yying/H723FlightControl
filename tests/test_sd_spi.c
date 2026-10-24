@@ -11,6 +11,7 @@ uint32_t fake_tick;
 static uint8_t reply[4096],command_bytes[6],written[512];
 static unsigned rp,rn,cp,write_pos,write_mode,read_pattern,dma_mode,aborts,stuck;
 static unsigned init_reject,multi_read,corrupt_crc,selected,card_idle=1;
+static unsigned reset_reject_remaining;
 static unsigned preerase_reply,app_reply,write_reply=5,stop_count,cmd_counts[64];
 static unsigned token_missing,preerase_arg,spi_bytes,dma_calls;
 static uint16_t write_crc;
@@ -26,7 +27,10 @@ static void respond(unsigned cmd)
 {
     uint8_t reg[16]={0};unsigned i;cmd_counts[cmd]++;
     switch(cmd){
-    case 0:card_idle=1;push(init_reject?0xff:1);break;
+    case 0:card_idle=1;
+        if(reset_reject_remaining){reset_reject_remaining--;push(0xff);}
+        else push(init_reject?0xff:1);
+        break;
     case 8:push(1);push(0);push(0);push(1);push(0xaa);break;
     case 55:push(card_idle?1:(uint8_t)app_reply);break;
     case 41:card_idle=0;push(0);break;
@@ -110,7 +114,13 @@ int main(void)
     SCB->CCR=SCB_CCR_DC_Msk;
     assert(crc7((uint8_t[]){0x40,0,0,0,0},5)==0x95);
     reinit();assert(high_capacity && fast && sectors==8388608);
-    assert(g_sd_spi_diag.revision==10 && g_sd_spi_diag.stage==SD_INIT_READY);
+    /* A transiently unresponsive reset must not escape to seconds-long
+     * filesystem recovery before a bounded local reset retry. */
+    reset_reject_remaining=3;
+    assert(disk_initialize(0)==0);
+    assert(reset_reject_remaining==0 && fast);
+    assert(g_sd_spi_diag.revision==11 && g_sd_spi_diag.stage==SD_INIT_READY);
+    assert(g_sd_spi_diag.cmd0_retry_recovered==1);
     assert(g_sd_spi_diag.cmd0.complete && g_sd_spi_diag.cmd0.r1==1);
     assert(disk_ioctl(0,GET_SECTOR_COUNT,&value)==RES_OK && value==8388608);
     read_pattern=37;assert(disk_read(0,b,100,1)==RES_OK);

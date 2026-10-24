@@ -20,7 +20,6 @@ int BlackboxStorage_Enqueue(const uint8_t *p,uint16_t n,uint64_t us){
     if(wire_out)assert(fwrite(p,1,n,wire_out)==n);
     return 1;
 }
-void AtomImu_GetData(AtomImuData_t *p){memset(p,0,sizeof(*p));}
 static void advance(unsigned us){test_dwt.CYCCNT+=us*480U;test_tick+=us/1000U;}
 static unsigned s_test_elapsed_us;
 static void timer_step(void){
