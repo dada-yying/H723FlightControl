@@ -7,6 +7,13 @@
 
 #define BMI088_SAMPLE_TIMEOUT_MS 20U
 #define BMI088_READ_PERIOD_US 500U
+/* Bosch DS000-19 sections 5.3.4/5.3.11: code 1 -> +/-6g, signed 16-bit.
+ * Table sensitivity is rounded to 5460 LSB/g; use the register formula. */
+#define BMI088_GRAVITY_M_S2 9.80665f
+#define BMI088_ACCEL_RANGE_REGISTER 0x01U
+#define BMI088_ACCEL_RANGE_G 6.0f
+#define BMI088_ACCEL_SCALE (BMI088_ACCEL_RANGE_G * BMI088_GRAVITY_M_S2 / 32768.0f)
+#define BMI088_ACCEL_CLIP_COUNTS 32440 /* ceil(0.99 * 32768), per-axis margin. */
 /* Preserve the existing AHRS saturation rejection, also used before filtering. */
 #define BMI088_GYRO_VALID_LIMIT_RAD_S 34.55751919f /* 99% of 2000 deg/s. */
 
@@ -49,6 +56,7 @@ typedef struct {
     uint8_t valid;
     uint8_t initialized;
     uint8_t error;
+    uint8_t accel_clipped; /* Raw per-axis counts >=99% FS, before calibration. */
     uint32_t calibration_version; /* Zero before first complete read. */
     float compensation_temperature_c; /* Clamped model input, not measured T. */
     uint8_t compensation_in_range; /* Numerical model bounds, NOT accuracy. */

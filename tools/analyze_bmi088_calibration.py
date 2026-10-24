@@ -14,6 +14,10 @@ import numpy as np
 import pandas as pd
 
 GYRO_SCALE = 0.0010652644360316953
+# Historical +/-3g RAW-count logs ONLY, using their original conversion.
+# Do not change this constant to the new firmware's +/-6g scale: that would
+# reinterpret the evidence used to fit the existing physical bias/scale.
+# Current calibrated m/s^2 logs are not input to this historical fitter.
 ACCEL_SCALE = 0.0008974358974
 G = 9.80665
 GYRO = [f"bmi088_gyro_raw[{i}]" for i in range(3)]

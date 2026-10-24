@@ -3,8 +3,10 @@
 
 #include "bmi088.h"
 
-/* Compile-time configuration: compare 40/50/60 Hz here, not in the logger.
- * Always on. Native sensor XYZ; no body rotation or temperature correction. */
+/* Compile-time cascade configuration. Always on; calibrated native XYZ.
+ * Bandwidth is the DIGITAL half-power (-3.0103 dB) crossing separation in Hz. */
+#define BMI088_GYRO_NOTCH_CENTER_HZ 120.0f
+#define BMI088_GYRO_NOTCH_BANDWIDTH_HZ 40.0f
 #define BMI088_GYRO_FILTER_CUTOFF_HZ 50.0f
 #define BMI088_GYRO_FILTER_RATE_WINDOW 128U
 #define BMI088_GYRO_FILTER_RATE_WINDOWS 3U
@@ -22,13 +24,15 @@ typedef enum {
 } Bmi088GyroFilterError_t;
 
 typedef struct Bmi088GyroFilterState {
-    float gyro_rad_s[3]; /* Calibrated + low-pass, native XYZ, rad/s. */
+    float gyro_rad_s[3]; /* Calibrated -> fixed notch -> LPF, native XYZ, rad/s. */
     float cutoff_hz, sample_hz, applied_sample_hz;
     float b0, b1, b2, a1, a2; /* Observer copies; Watch writes do not tune. */
     uint32_t sample_count, sample_tick_ms, age_ms;
     uint32_t update_count, reset_count, rejected_count, coefficient_update_count;
     uint32_t max_compute_duration_us;
     uint8_t has_sample, initialized, valid, error;
+    float notch_center_hz, notch_bandwidth_hz;
+    float notch_b0, notch_b1, notch_b2, notch_a1, notch_a2;
 } Bmi088GyroFilterState_t;
 
 extern volatile Bmi088GyroFilterState_t g_bmi088_gyro_filter;

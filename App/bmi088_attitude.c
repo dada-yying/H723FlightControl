@@ -5,7 +5,7 @@
 #include <float.h>
 #include <string.h>
 
-#define BMI_ATTITUDE_GRAVITY 9.80665f
+#define BMI_ATTITUDE_GRAVITY BMI088_GRAVITY_M_S2
 #define BMI_ATTITUDE_ALIGN_MS 50U
 #define BMI_ATTITUDE_ALIGN_SAMPLES 64U
 #define BMI_ATTITUDE_ALIGN_RATE_RAD_S 0.1745329252f /* 10 deg/s */
@@ -122,9 +122,17 @@ const Bmi088AttitudeState_t *Bmi088Attitude_Compute(const Bmi088Data_t *sample,
         BmiAttitude_Reset(BMI088_ATTITUDE_TIME_GAP);
     s_seen = 1; s_cycle = completion_cycle; s_tick = sample->sample_tick_ms; s_count = sample->sample_count;
     for (i = 0; i < 3; i++) {
-        if (!BmiAttitude_Finite(sample->gyro_rad_s[i]) || !BmiAttitude_Finite(sample->accel_m_s2[i]) ||
-            fabsf(sample->accel_m_s2[i]) > 4.0f * BMI_ATTITUDE_GRAVITY) {
+        if (!BmiAttitude_Finite(sample->gyro_rad_s[i]) || !BmiAttitude_Finite(sample->accel_m_s2[i])) {
             s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_BAD_INPUT);
+            return &s_attitude;
+        }
+        /* Hardware clipping uses pre-calibration counts. The second bound is
+         * calibrated physical sanity (including bias/scale), not gravity trust.
+         * In-range 4-5g motion remains gyro prediction; 0.8-1.2g gate below stays. */
+        if (sample->accel_clipped || fabsf(sample->accel_m_s2[i]) >
+            (BMI088_ACCEL_RANGE_G * BMI_ATTITUDE_GRAVITY + fabsf(g_bmi088_calibration.accel_bias_m_s2[i])) *
+            g_bmi088_calibration.accel_scale[i]) {
+            s_attitude.rejected_count++; BmiAttitude_Reset(BMI088_ATTITUDE_ACCEL_OVERRANGE);
             return &s_attitude;
         }
         if (fabsf(sample->gyro_rad_s[i]) >= BMI088_GYRO_VALID_LIMIT_RAD_S) {

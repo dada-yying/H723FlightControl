@@ -184,6 +184,18 @@ int main(void)
     }
     attitude_reset(0, 0); settle(0, 0); input.accel_m_s2[2] = NAN; feed(500);
     assert(!g_bmi088_attitude_state.valid && g_bmi088_attitude_state.error == BMI088_ATTITUDE_BAD_INPUT);
+    /* Full-scale handling is independent of the unchanged gravity trust gate.
+     * 5g was rejected by the old fixed 4g bound; now it is gyro-only motion. */
+    attitude_reset(0,0);settle(0,0);
+    input.accel_m_s2[2]=5.0f*9.80665f;feed(500);
+    assert(g_bmi088_attitude_state.valid && !g_bmi088_attitude_state.accel_used);
+    input.accel_m_s2[2]=-5.0f*9.80665f;feed(500);
+    assert(g_bmi088_attitude_state.valid && !g_bmi088_attitude_state.accel_used);
+    input.accel_clipped=1;feed(500);
+    assert(!g_bmi088_attitude_state.valid && g_bmi088_attitude_state.error==BMI088_ATTITUDE_ACCEL_OVERRANGE);
+    input.accel_clipped=0;settle(0,0);
+    input.accel_m_s2[1]=7.0f*9.80665f;feed(500);
+    assert(!g_bmi088_attitude_state.valid && g_bmi088_attitude_state.error==BMI088_ATTITUDE_ACCEL_OVERRANGE);
     /* Numerical fault / zero dt / long DWT wrap interval are not extrapolated. */
     attitude_reset(0, 0); settle(0, 0); s_ahrs.quaternion.array[0] = NAN; feed(500);
     assert(!g_bmi088_attitude_state.valid && g_bmi088_attitude_state.error == BMI088_ATTITUDE_NUMERICAL_ERROR);

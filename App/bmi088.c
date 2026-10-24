@@ -15,15 +15,14 @@
 #define BMI088_SPI_TIMEOUT_MS 1U
 #define BMI088_RESET_WAIT_MS 80U
 #define BMI088_RETRY_MS 1000U
-#define BMI088_ACCEL_SCALE 0.0008974358974f
 #define BMI088_GYRO_SCALE 0.0010652644360316953f
 
-/* Ranges preserved. Accel highest available ODR = 1600 Hz (normal bandwidth);
+/* Accel +/-6g, highest available ODR = 1600 Hz (normal bandwidth);
  * gyro ODR = 2000 Hz / 230 Hz bandwidth. MCU reads on TIM7, not sensor DRDY;
  * accel can repeat in the 2 kHz snapshots, and gyro phase/jitter can skip/repeat. */
 static const uint8_t s_accel_config[][2] = {
     {0x7D, 0x04}, {0x7C, 0x00}, {0x40, 0xAC},
-    {0x41, 0x00}, {0x53, 0x08}, {0x58, 0x04}
+    {0x41, BMI088_ACCEL_RANGE_REGISTER}, {0x53, 0x08}, {0x58, 0x04}
 };
 static const uint8_t s_gyro_config[][2] = {
     {0x0F, 0x00}, {0x10, 0x81}, {0x11, 0x00},
@@ -276,7 +275,10 @@ static void Bmi088_ReadSample(void)
     for (axis = 0; axis < 3; axis++) {
         /* Register/nominal motion data exists only in this local sample until
          * calibration, never in g_bmi088_data or the blackbox registry. */
-        sample.accel_m_s2[axis] = Bmi088_I16(accel + axis * 2) * BMI088_ACCEL_SCALE;
+        const int32_t counts = Bmi088_I16(accel + axis * 2);
+        if (counts >= BMI088_ACCEL_CLIP_COUNTS || counts <= -BMI088_ACCEL_CLIP_COUNTS)
+            sample.accel_clipped = 1;
+        sample.accel_m_s2[axis] = counts * BMI088_ACCEL_SCALE;
         sample.gyro_rad_s[axis] = Bmi088_I16(gyro + 2 + axis * 2) * BMI088_GYRO_SCALE;
     }
     sample.temperature_raw = (int16_t)(((uint16_t)temp[0] << 3) | (temp[1] >> 5));

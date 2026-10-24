@@ -8,6 +8,7 @@
 
 typedef struct { float x1, x2, y1, y2; } BmiGyroHistory;
 static BmiGyroHistory s_gyro_history[3];
+static BmiGyroHistory s_notch_history[3];
 static Bmi088GyroFilterState_t s_gyro_filter;
 static uint32_t s_gyro_count, s_gyro_cycle, s_gyro_tick, s_rate_intervals;
 static uint64_t s_rate_cycles, s_candidate_cycles;
@@ -19,6 +20,32 @@ static uint32_t s_stalled_cycle;
 volatile Bmi088GyroFilterState_t g_bmi088_gyro_filter;
 
 static int BmiFilter_Finite(float v) { return v >= -FLT_MAX && v <= FLT_MAX; }
+
+static int BmiFilter_Parameters(float cutoff, float hz)
+{
+    const float center=BMI088_GYRO_NOTCH_CENTER_HZ, bw=BMI088_GYRO_NOTCH_BANDWIDTH_HZ;
+    return BmiFilter_Finite(cutoff) && BmiFilter_Finite(hz) &&
+        BmiFilter_Finite(center) && BmiFilter_Finite(bw) &&
+        cutoff>0 && hz>0 && cutoff<0.45f*hz && center>0 && bw>0 &&
+        bw<2.0f*center && center+0.5f*bw<0.45f*hz;
+}
+
+/* H(z)=b0*(1-2*cos(w0)z^-1+z^-2)/(1+a1*z^-1+a2*z^-2).
+ * beta=tan(pi*BW/fs) makes the two half-power frequencies differ by BW
+ * exactly in DIGITAL Hz. Their arithmetic midpoint is not generally f0.
+ * Q=f0/BW alone does not encode this digital bandwidth. */
+static int BmiFilter_NotchDesign(float center, float bw, float hz, float c[5])
+{
+    float beta;
+    unsigned i;
+    if(!BmiFilter_Finite(center) || !BmiFilter_Finite(bw) || !BmiFilter_Finite(hz) ||
+       !(center>0 && bw>0 && bw<2.0f*center && center+0.5f*bw<0.45f*hz))return 0;
+    beta=tanf(BMI_FILTER_PI*bw/hz);
+    c[0]=1.0f/(1.0f+beta);c[1]=-2.0f*c[0]*cosf(2.0f*BMI_FILTER_PI*center/hz);
+    c[2]=c[0];c[3]=c[1];c[4]=2.0f*c[0]-1.0f;
+    for(i=0;i<5;i++)if(!BmiFilter_Finite(c[i]))return 0;
+    return fabsf(c[4])<1.0f && 1.0f+c[3]+c[4]>0 && 1.0f-c[3]+c[4]>0;
+}
 
 static void BmiFilter_ResetHistory(uint8_t error, uint8_t reset_clock)
 {
@@ -37,8 +64,9 @@ static void BmiFilter_ResetHistory(uint8_t error, uint8_t reset_clock)
 static int BmiFilter_Design(float cutoff, float hz)
 {
     float k, n, b0, b1, b2, a1, a2;
-    if(!BmiFilter_Finite(cutoff) || !BmiFilter_Finite(hz) ||
-       !(cutoff>0 && hz>0 && cutoff<0.45f*hz))return 0;
+    float notch[5];
+    if(!BmiFilter_Parameters(cutoff,hz) ||
+       !BmiFilter_NotchDesign(BMI088_GYRO_NOTCH_CENTER_HZ,BMI088_GYRO_NOTCH_BANDWIDTH_HZ,hz,notch))return 0;
     k=tanf(BMI_FILTER_PI*cutoff/hz);
     n=1.0f/(1.0f+BMI_FILTER_SQRT_TWO*k+k*k);
     b0=k*k*n;b1=2.0f*b0;b2=b0;
@@ -49,6 +77,10 @@ static int BmiFilter_Design(float cutoff, float hz)
     s_gyro_filter.b0=b0;s_gyro_filter.b1=b1;s_gyro_filter.b2=b2;
     s_gyro_filter.a1=a1;s_gyro_filter.a2=a2;
     s_gyro_filter.cutoff_hz=cutoff;s_gyro_filter.applied_sample_hz=hz;
+    s_gyro_filter.notch_center_hz=BMI088_GYRO_NOTCH_CENTER_HZ;
+    s_gyro_filter.notch_bandwidth_hz=BMI088_GYRO_NOTCH_BANDWIDTH_HZ;
+    s_gyro_filter.notch_b0=notch[0];s_gyro_filter.notch_b1=notch[1];s_gyro_filter.notch_b2=notch[2];
+    s_gyro_filter.notch_a1=notch[3];s_gyro_filter.notch_a2=notch[4];
     s_gyro_filter.coefficient_update_count++;
     return 1;
 }
@@ -58,6 +90,7 @@ void Bmi088GyroFilter_Init(void)
     const float nominal_hz=1000000.0f/(float)BMI088_READ_PERIOD_US;
     memset(&s_gyro_filter,0,sizeof(s_gyro_filter));
     memset(s_gyro_history,0,sizeof(s_gyro_history));
+    memset(s_notch_history,0,sizeof(s_notch_history));
     s_gyro_count_seen=s_gyro_clock_seen=0;s_rate_intervals=0;
     s_stalled_cycle_seen=0;
     s_rate_cycles=s_candidate_cycles=0;s_candidate_windows=0;
@@ -80,8 +113,7 @@ static void BmiFilter_MeasureRate(uint32_t cycles)
     if(s_rate_intervals<BMI088_GYRO_FILTER_RATE_WINDOW)return;
     hz=(float)((double)SystemCoreClock*(double)s_rate_intervals/(double)s_rate_cycles);
     s_gyro_filter.sample_hz=hz;
-    if(!BmiFilter_Finite(hz) || !(BMI088_GYRO_FILTER_CUTOFF_HZ>0 &&
-       BMI088_GYRO_FILTER_CUTOFF_HZ<0.45f*hz)) {
+    if(!BmiFilter_Parameters(BMI088_GYRO_FILTER_CUTOFF_HZ,hz)) {
         s_rate_supported=0;s_candidate_windows=0;s_candidate_cycles=0;
         BmiFilter_ResetHistory(BMI088_GYRO_FILTER_BAD_PARAMETERS,0);
     } else {
@@ -109,7 +141,7 @@ const Bmi088GyroFilterState_t *Bmi088GyroFilter_Compute(const Bmi088Data_t *samp
                                                      uint32_t completion_cycle)
 {
     uint32_t start=DWT->CYCCNT,cycles=0,elapsed=0,duration;
-    float result[3];
+    float result[3],notched[3];
     unsigned axis;
     if(!sample || !sample->initialized || !sample->valid || !sample->has_sample) {
         BmiFilter_ResetHistory(BMI088_GYRO_FILTER_SOURCE_INVALID,1);return &s_gyro_filter;
@@ -145,20 +177,29 @@ const Bmi088GyroFilterState_t *Bmi088GyroFilter_Compute(const Bmi088Data_t *samp
     if(!s_rate_supported)return &s_gyro_filter;
     for(axis=0;axis<3;axis++) {
         const BmiGyroHistory *h=&s_gyro_history[axis];
+        const BmiGyroHistory *nh=&s_notch_history[axis];
         const float input=sample->gyro_rad_s[axis];
+        notched[axis]=s_gyro_filter.initialized ?
+            s_gyro_filter.notch_b0*input+s_gyro_filter.notch_b1*nh->x1+s_gyro_filter.notch_b2*nh->x2-
+            s_gyro_filter.notch_a1*nh->y1-s_gyro_filter.notch_a2*nh->y2 : input;
         result[axis]=s_gyro_filter.initialized ?
-            s_gyro_filter.b0*input+s_gyro_filter.b1*h->x1+s_gyro_filter.b2*h->x2-
+            s_gyro_filter.b0*notched[axis]+s_gyro_filter.b1*h->x1+s_gyro_filter.b2*h->x2-
             s_gyro_filter.a1*h->y1-s_gyro_filter.a2*h->y2 : input;
-        if(!BmiFilter_Finite(result[axis])) {
+        if(!BmiFilter_Finite(notched[axis]) || !BmiFilter_Finite(result[axis])) {
             s_gyro_filter.rejected_count++;BmiFilter_ResetHistory(BMI088_GYRO_FILTER_NUMERICAL_ERROR,1);return &s_gyro_filter;
         }
     }
     /* Validate all axes before committing any history/output. */
     for(axis=0;axis<3;axis++) {
         BmiGyroHistory *h=&s_gyro_history[axis];
-        if(!s_gyro_filter.initialized)h->x1=h->x2=h->y1=h->y2=result[axis];
+        BmiGyroHistory *nh=&s_notch_history[axis];
+        if(!s_gyro_filter.initialized){
+            h->x1=h->x2=h->y1=h->y2=result[axis];
+            nh->x1=nh->x2=nh->y1=nh->y2=sample->gyro_rad_s[axis];
+        }
         else {
-            h->x2=h->x1;h->x1=sample->gyro_rad_s[axis];h->y2=h->y1;h->y1=result[axis];
+            nh->x2=nh->x1;nh->x1=sample->gyro_rad_s[axis];nh->y2=nh->y1;nh->y1=notched[axis];
+            h->x2=h->x1;h->x1=notched[axis];h->y2=h->y1;h->y1=result[axis];
         }
         s_gyro_filter.gyro_rad_s[axis]=result[axis];
     }

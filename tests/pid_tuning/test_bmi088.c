@@ -94,7 +94,7 @@ static void ready(void)
     assert(g_bmi088_stats.stage == BMI088_RUNNING);
     assert(g_bmi088_stats.init_success_count && g_bmi088_data.initialized);
     assert(!test_spi_cs && test_spi_calls == test_spi_cs_release_count);
-    assert(registers[1][0x40] == 0xAC && registers[0][0x10] == 0x81);
+    assert(registers[1][0x40] == 0xAC && registers[1][0x41] == 0x01 && registers[0][0x10] == 0x81);
 }
 
 static void put_i16(unsigned accel, unsigned reg, int value)
@@ -139,6 +139,27 @@ int main(void)
     for (test_tick = 1; test_tick < 80; test_tick++) Bmi088_Process();
     assert(test_spi_calls == calls); /* Reset wait neither spins nor uses SPI. */
     ready(); assert(!g_bmi088_data.has_sample && !g_bmi088_data.valid);
+    /* Independent official +/-6g register formula, not the production macro.
+     * Includes signed endpoints, sign extension, one-g and near-rail margin. */
+    { const int counts[]={-32768,-32767,-32440,-32439,-5461,-1,0,1,5461,16384,32439,32440,32767};
+      unsigned j,axis;
+      assert(fabs((double)BMI088_ACCEL_SCALE-6.0*9.80665/32768)<1e-10);
+      measurement(136);
+      for(j=0;j<sizeof(counts)/sizeof(counts[0]);j++) {
+        double nominal=counts[j]*(6.0*9.80665/32768.0);
+        for(axis=0;axis<3;axis++)put_i16(1,0x12+2*axis,counts[j]);
+        event_process();Bmi088_GetData(&data);
+        for(axis=0;axis<3;axis++) {
+          double expected=(nominal-g_bmi088_calibration.accel_bias_m_s2[axis])*
+              g_bmi088_calibration.accel_scale[axis];
+          assert(fabs(data.accel_m_s2[axis]-expected)<1e-5);
+        }
+        assert(data.accel_clipped==(counts[j]>=32440 || counts[j]<=-32440));
+      }
+      assert(fabs(5461*(6.0*9.80665/32768)-9.80665)<.001);
+      /* Restore the original test's initial sample numbering. */
+      model_reset(0);ready();
+    }
     measurement(-80); event_process(); Bmi088_GetData(&data);
     assert(data.has_sample && data.valid && data.age_ms == 0 && data.sample_count == 1);
     assert(data.temperature_raw == -80 && data.temperature_c == 13);

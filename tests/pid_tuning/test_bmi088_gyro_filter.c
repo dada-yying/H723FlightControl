@@ -1,4 +1,4 @@
-/* Real LPF/acquisition/AHRS/control/logger; independent double reference below. */
+/* Real notch/LPF/acquisition/AHRS/control/logger; double reference below. */
 #define main blackbox_fixture_main
 #include "test_blackbox.c"
 #undef main
@@ -34,6 +34,21 @@ static void reference_init(DoubleFilter *f,double cutoff,double hz)
     f->b[0]=(1.0-cosine)*0.5*norm;f->b[1]=(1.0-cosine)*norm;f->b[2]=f->b[0];
     f->a[0]=-2.0*cosine*norm;f->a[1]=(1.0-alpha)*norm;
 }
+static void reference_notch_init(DoubleFilter *f,double hz)
+{
+    const double t=tan(3.14159265358979323846*40.0/hz);
+    memset(f,0,sizeof(*f));
+    f->a[1]=(1-t)/(1+t);
+    f->a[0]=-(1+f->a[1])*cos(2*3.14159265358979323846*120.0/hz);
+    f->b[0]=(1+f->a[1])*.5;f->b[1]=f->a[0];f->b[2]=f->b[0];
+}
+static double notch_gain(double f,double hz)
+{
+    double w=2*3.14159265358979323846*f/hz;
+    double d=cos(w)-cos(2*3.14159265358979323846*120/hz);
+    double q=tan(3.14159265358979323846*40/hz)*sin(w);
+    return fabs(d)/sqrt(d*d+q*q);
+}
 static double reference_step(DoubleFilter *f,unsigned axis,double input)
 {
     double out=f->b[0]*input+f->b[1]*f->x[axis][0]+f->b[2]*f->x[axis][1]-
@@ -42,15 +57,17 @@ static double reference_step(DoubleFilter *f,unsigned axis,double input)
     f->y[axis][1]=f->y[axis][0];f->y[axis][0]=out;return out;
 }
 
+#ifndef BMI_FILTER_FIXTURE_ONLY
 int main(void)
 {
     unsigned i,axis,updates,resets;
     Bmi088GyroFilterState_t before,state;
     Bmi088Data_t raw;
     const Bmi088GyroFilterState_t *result;
-    DoubleFilter reference;
+    DoubleFilter reference,notch;
     filter_reset();Bmi088GyroFilter_GetState(&state);
     assert(!state.valid && state.age_ms==UINT32_MAX && state.cutoff_hz==50 && state.applied_sample_hz==2000);
+    assert(state.notch_center_hz==120 && state.notch_bandwidth_hz==40);
     result=filter_feed(500,.25f,-.5f,1.0f);
     assert(result->valid && result->update_count==1);
     assert(result->gyro_rad_s[0]==.25f && result->gyro_rad_s[1]==-.5f && result->gyro_rad_s[2]==1.0f);
@@ -65,13 +82,14 @@ int main(void)
     assert(state.valid && raw.sample_count==state.sample_count && raw.sample_tick_ms==state.sample_tick_ms);
     assert(!memcmp(raw.gyro_rad_s,filter_input.gyro_rad_s,sizeof(raw.gyro_rad_s)));
 
-    filter_reset();filter_feed(500,0,0,0);reference_init(&reference,50,2000);
+    filter_reset();filter_feed(500,0,0,0);reference_init(&reference,50,2000);reference_notch_init(&notch,2000);
     for(i=0;i<8000;i++) {
         const float x=i<3000 ? 1.0f : -.5f;
         const float y=i<4000 ? -.75f : .25f;
         const float z=i&1U ? .5f : -.5f;
         const float input[3]={x,y,z};result=filter_feed(500,x,y,z);
-        for(axis=0;axis<3;axis++)assert(fabs(result->gyro_rad_s[axis]-reference_step(&reference,axis,input[axis]))<2e-5);
+        for(axis=0;axis<3;axis++)assert(fabs(result->gyro_rad_s[axis]-
+            reference_step(&reference,axis,reference_step(&notch,axis,input[axis])))<3e-5);
     }
     /* Independent axes + exact analytic digital frequency response. */
     { unsigned rate_index;
@@ -93,9 +111,9 @@ int main(void)
       for(axis=0;axis<3;axis++) {
         double gain=sqrt(sine_sum[axis]*sine_sum[axis]+cosine_sum[axis]*cosine_sum[axis])*2/4000;
         double ratio=tan(3.14159265358979323846*frequencies[axis]/hz)/tan(3.14159265358979323846*50/hz);
-        double expected=1/sqrt(1+pow(ratio,4));
+        double expected=notch_gain(frequencies[axis],hz)/sqrt(1+pow(ratio,4));
         assert(fabs(20*log10(gain/expected))<.1);
-        printf("LPF %.0f Hz @ %u Hz: %.5f dB (reference %.5f dB)\n",frequencies[axis],hz,20*log10(gain),20*log10(expected));
+        printf("Cascade %.0f Hz @ %u Hz: %.5f dB (reference %.5f dB)\n",frequencies[axis],hz,20*log10(gain),20*log10(expected));
       }
       assert(s_gyro_filter.applied_sample_hz==hz);
       }
@@ -144,6 +162,11 @@ int main(void)
     before=s_gyro_filter;
     { const float bad[]={0,-1,NAN,INFINITY};
       for(i=0;i<4;i++) {assert(!BmiFilter_Design(bad[i],2000));assert(!BmiFilter_Design(50,bad[i]));}
+      for(i=0;i<4;i++) {float c[5];
+        assert(!BmiFilter_NotchDesign(bad[i],40,2000,c));
+        assert(!BmiFilter_NotchDesign(120,bad[i],2000,c));
+        assert(!BmiFilter_NotchDesign(120,40,bad[i],c));
+      }
       assert(!BmiFilter_Design(900,2000) && !BmiFilter_Design(50,100));
       assert(!memcmp(&before,&s_gyro_filter,sizeof(before)));
     }
@@ -165,6 +188,14 @@ int main(void)
     assert(!result->valid && result->error==BMI088_GYRO_FILTER_NUMERICAL_ERROR);
     assert(!memcmp(before.gyro_rad_s,result->gyro_rad_s,12));
     result=filter_feed(500,1,2,3);assert(result->valid && result->gyro_rad_s[1]==2);
+    before=s_gyro_filter;s_notch_history[2].y1=INFINITY;
+    { BmiGyroHistory lowpass_before[3];memcpy(lowpass_before,s_gyro_history,sizeof(lowpass_before));
+      result=filter_feed(500,1,2,3);
+      assert(!result->valid && result->error==BMI088_GYRO_FILTER_NUMERICAL_ERROR);
+      assert(!memcmp(before.gyro_rad_s,result->gyro_rad_s,12));
+      assert(!memcmp(lowpass_before,s_gyro_history,sizeof(lowpass_before)));
+    }
+    result=filter_feed(500,1,2,3);assert(result->valid && result->gyro_rad_s[2]==3);
     filter_input.sample_count=s_gyro_count=UINT32_MAX;test_dwt.CYCCNT=s_gyro_cycle=UINT32_MAX-100U;
     filter_us=(uint64_t)(UINT32_MAX-1U)*1000U;s_gyro_tick=filter_input.sample_tick_ms=(uint32_t)(filter_us/1000U);
     filter_feed(500,1,2,3);filter_feed(500,1,2,3);filter_feed(500,1,2,3);filter_feed(500,1,2,3);
@@ -200,6 +231,7 @@ int main(void)
       Bmi088_GetSnapshotWithFilter(&sensor,&filtered,&attitude);
       assert(sensor.valid && !filtered.valid && !attitude.valid);
     }
-    puts("PASS BMI088 Butterworth LPF: startup/steps/double reference/response/axes, fresh-only, jitter/sustained rate, NaN/Inf/parameters, stale recovery/wraps, raw/PID isolation and filtered AHRS");
+    puts("PASS BMI088 notch->Butterworth: startup/steps/double reference/response/axes, fresh-only, jitter/rate, invalid input/parameters/state, recovery/wrap, raw/PID isolation and filtered AHRS");
     return 0;
 }
+#endif

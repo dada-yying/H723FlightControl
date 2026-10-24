@@ -1,5 +1,10 @@
 # 板载 BMI088 独立姿态解算与记录
 
+当前状态（2026-10-24）：BMI088 已是唯一飞控反馈源，坐标为 RFU、世界约定相对 ENU。
+姿态输入为 120 Hz／40 Hz 陷波＋50 Hz 低通的最终角速度，硬件加速度量程 ±6g；
+0.8g～1.2g 重力可信门限保留，削顶检查另行处理。当前规范见 [BMI088_FILTERS.md](BMI088_FILTERS.md)，
+下文独立记录/ATOM/FRD 配置说明保留为历史记录。
+
 ## 参考实现与选择
 
 - [Meta-Team/Meta-Embedded-NG](https://github.com/Meta-Team/Meta-Embedded-NG)：

@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix="bmi088-cross-") as directory:
                         assert f"bmi088_gyro_calibrated_rad_s[{axis}]" not in row
                         assert f"bmi088_accel_calibrated_m_s2[{axis}]" not in row
                         nominal_gyro = f32(gyro * f32(0.0010652644360316953))
-                        nominal_accel = f32(accel * f32(0.0008974358974))
+                        nominal_accel = f32(accel * f32(f32(6.0*f32(9.80665))/32768.0))
                         applied_bias = f32(gyro_bias[axis] + f32(gyro_temperature[axis] * -7.0))
                         assert f"bmi088_gyro_rad_s[{axis}]" not in row
                         assert float(row[f"bmi088_gyro_deg_s[{axis}]"]) == f32(f32(nominal_gyro - applied_bias) * f32(57.295779513))

@@ -119,6 +119,8 @@ static void Blackbox_Sample(uint8_t *payload)
           const float rate_deg_s=filter.gyro_rad_s[axis]*57.295779513f;
           memcpy(payload+184+4*axis,&rate_deg_s,4);
       } }
+    /* Same field/units: now the final 120 Hz notch -> 50 Hz LPF result.
+     * cutoff_hz remains the LPF cutoff, not the notch center. */
     payload[196]=filter.valid;
     memcpy(payload+197,&filter.cutoff_hz,4);memcpy(payload+201,&filter.applied_sample_hz,4);
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS

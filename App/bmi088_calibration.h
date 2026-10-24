@@ -4,7 +4,9 @@
 /* This individual board, six stationary faces and warm-up, 2026-10-03.
  * Provenance/selection/held-out checks: BMI088_CALIBRATION.md and
  * ../tools/analyze_bmi088_calibration.py. Native sensor XYZ, no body rotation.
- * Applied to the current nominal +/-3g and +/-2000 deg/s unit conversion.
+ * Fitted with the historical +/-3g conversion, gyro +/-2000 deg/s.
+ * Accel bias is m/s^2 and scale dimensionless: (physical - bias) * scale.
+ * Reused unchanged after +/-6g conversion; NOT validated/recalibrated at +/-6g.
  * Linear gyro temperature bias validated across log recordings. Accel thermal
  * candidates were rejected; preserve the six-face offset/scale. No gyro scale,
  * body rotation, adaptive zeroing or software filtering. Cold endpoint has
