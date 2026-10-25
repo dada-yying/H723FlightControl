@@ -23,7 +23,7 @@ static void temperature(float value, unsigned delay)
     measurement((int)floorf((value - 23.0f) * 8.0f + 0.5f));
     event_process();
     Bmi088Heater_Process();
-    assert(g_bmi088_heater_state.pwm_ccr <= 500);
+    assert(g_bmi088_heater_state.pwm_ccr <= 1500);
     assert(htim3.compare[TIM_CHANNEL_4] == g_bmi088_heater_state.pwm_ccr);
 }
 
@@ -35,11 +35,18 @@ int main(void)
     TIM_HandleTypeDef esc1, esc2;
     /* Sensor acquisition remains independent from thermal control. */
     acquisition_regression_main();
+    /* Requirement values, not expectations obtained from production helpers:
+     * KP=120 CCR/C, KI=15 CCR/(C*s), ARR+1=10000, max=1500 (15%). */
+    assert(HEATER_KP_CCR_PER_C == 120.0f && HEATER_KI_CCR_PER_C_S == 15.0f);
+    assert(BMI088_HEATER_MAX_CCR == 1500U);
+    assert(BMI088_HEATER_TARGET_C == 40.0f && BMI088_HEATER_OVERTEMP_C == 45.0f);
     heater_reset(100); temperature(39, 1);
-    assert(g_bmi088_heater_state.target_c == 40 && g_bmi088_heater_state.pwm_ccr == 100);
+    /* 1 C error: first P=120, I=0; after 20ms, delta-I=15*1*.020=.3.
+     * 120.3 rounds to 120 CCR, so integral is checked independently. */
+    assert(g_bmi088_heater_state.target_c == 40 && g_bmi088_heater_state.pwm_ccr == 120);
     assert(g_bmi088_heater_state.integral_ccr == 0);
     temperature(39, 20);
-    assert(g_bmi088_heater_state.pwm_ccr == 101 && fabs(g_bmi088_heater_state.integral_ccr - 1) < 1e-6);
+    assert(g_bmi088_heater_state.pwm_ccr == 120 && fabs(g_bmi088_heater_state.integral_ccr - .3f) < 1e-6);
     count = g_bmi088_heater_state.update_count; integral = s_integral_ccr;
     temperature(38, 1); assert(g_bmi088_heater_state.update_count == count);
     for(i=0;i<18;i++) { test_tick++; Bmi088Heater_Process(); }
@@ -49,21 +56,25 @@ int main(void)
     test_tick++; Bmi088Heater_CheckTimeout(); /* age 20 ms */
     assert(g_bmi088_heater_state.stop_reason == BMI088_HEATER_SENSOR_TIMEOUT);
     assert(!g_bmi088_heater_state.heating && s_integral_ccr == 0);
-    temperature(39, 1); assert(g_bmi088_heater_state.pwm_ccr == 100);
+    temperature(39, 1); assert(g_bmi088_heater_state.pwm_ccr == 120);
+    puts("PASS heater cadence: first P=120, 20ms I=0.3, fresh-only, independent age19/20ms shutdown and recovery");
 
     heater_reset(100); temperature(39, 1); temperature(39, 50);
-    assert(fabs(s_integral_ccr - 2.5f) < 1e-6 && g_bmi088_heater_state.pwm_ccr == 103);
+    /* 50ms at 1 C: I=15*.050=.75 CCR; round(120.75)=121. */
+    assert(fabs(s_integral_ccr - .75f) < 1e-6 && g_bmi088_heater_state.pwm_ccr == 121);
     temperature(39, 200); /* Scheduler gap resets history, no integration burst. */
-    assert(s_integral_ccr == 0 && g_bmi088_heater_state.pwm_ccr == 100);
+    assert(s_integral_ccr == 0 && g_bmi088_heater_state.pwm_ccr == 120);
 
-    /* Maximum output is 5%, saturation cannot keep increasing integral. */
+    /* 20 C error requests P=2400>1500; anti-windup must retain I=0.
+     * 1500/10000 = 15%, independent of the production clamp helper. */
     heater_reset(100); temperature(20, 1);
     for(i=0;i<1000;i++) temperature(20, 20);
-    assert(g_bmi088_heater_state.pwm_ccr == 500 && s_integral_ccr == 0);
-    assert(fabs(g_bmi088_heater_state.duty - .05f) < 1e-7);
+    assert(g_bmi088_heater_state.pwm_ccr == 1500 && s_integral_ccr == 0);
+    assert(fabs(g_bmi088_heater_state.duty - .15f) < 1e-7);
     for(i=0;i<4;i++) { htim1.compare[i]=1100+i; htim2.compare[i]=1500+i; }
     esc1=htim1;esc2=htim2; temperature(39, 20);
     assert(!memcmp(&esc1,&htim1,sizeof(esc1)) && !memcmp(&esc2,&htim2,sizeof(esc2)));
+    puts("PASS heater limits: measured dt, long-gap reset, 1500CCR/15% anti-windup and ESC isolation");
     g_bmi088_heater_force_stop=1; Bmi088Heater_CheckTimeout();
     assert(g_bmi088_heater_state.stop_reason == BMI088_HEATER_MANUAL_STOP && s_integral_ccr == 0);
     g_bmi088_heater_force_stop=0; temperature(41, 1);
@@ -73,6 +84,7 @@ int main(void)
     g_bmi088_heater_force_stop=1; temperature(30, 20);
     g_bmi088_heater_force_stop=0; temperature(30, 20);
     assert(g_bmi088_heater_state.stop_reason == BMI088_HEATER_OVERTEMPERATURE && !g_bmi088_heater_state.heating);
+    puts("PASS heater manual stop/recovery and 45C latch survives force_stop toggles");
 
     /* SPI failure stops heat on the same task activation, then retry/resume
      * uses zero integral. No extra SPI owner is introduced by the guard. */
@@ -82,9 +94,10 @@ int main(void)
     assert(!g_bmi088_heater_state.heating && g_bmi088_data.sample_count == sample);
     assert(g_bmi088_heater_state.stop_reason == BMI088_HEATER_SENSOR_INVALID);
     fail_call=0;test_tick+=1000;ready();temperature(39,1);
-    assert(g_bmi088_heater_state.pwm_ccr == 100 && s_integral_ccr == 0);
+    assert(g_bmi088_heater_state.pwm_ccr == 120 && s_integral_ccr == 0);
     Bmi088_OnTaskCreationFailure();Bmi088Heater_CheckTimeout();
     assert(!g_bmi088_heater_state.heating);
+    puts("PASS heater SPI failure, retry recovery and sensor task failure shutdown");
 
     for(status=HAL_ERROR;status<=HAL_TIMEOUT;status++) {
         test_check_pwm_critical=0;Bmi088Heater_Init((HAL_StatusTypeDef)status);
@@ -93,6 +106,7 @@ int main(void)
         test_pwm_start_status=(HAL_StatusTypeDef)status;Bmi088Heater_Init(HAL_OK);
         assert(!g_bmi088_heater_state.initialized && htim3.compare[TIM_CHANNEL_4] == 0);
     }
+    puts("PASS heater PWM init/start failures remain off");
     /* Corrupt non-finite/implausible temperatures cannot request full heat. */
     {
         const float bad[]={NAN,INFINITY,-INFINITY,-41,86};
@@ -103,11 +117,16 @@ int main(void)
         }
     }
     heater_reset(UINT32_MAX-240U);temperature(39,1);temperature(39,20);
-    assert(g_bmi088_heater_state.pwm_ccr == 101);
+    assert(g_bmi088_heater_state.pwm_ccr == 120);
+    assert(fabs(g_bmi088_heater_state.integral_ccr - .3f) < 1e-6);
     test_tick+=20;Bmi088Heater_CheckTimeout();assert(!g_bmi088_heater_state.heating);
+    puts("PASS heater invalid temperatures and tick wrap");
 
     /* First-order thermal PLANT model, not a hardware temperature guarantee:
-     * quantized 0.125 C measurements, ambient 25 C, 50 C equilibrium at 5%. */
+     * UNCHANGED plant: ambient 25C, gain 500 C/unit duty, time constant 10s,
+     * Euler step .02s, measurements quantized .125C and held for 1.28s.
+     * Equilibria: 50C at 5%, 100C at the new 15% ceiling; 40C needs 3%.
+     * These are model assumptions, not an identified real-board plant. */
     {
         float actual=25, measured=25, max_temperature=actual;
         heater_reset(100);temperature(actual,1);
@@ -123,6 +142,6 @@ int main(void)
         printf("PASS thermal MODEL: final %.3f C, peak %.3f C; actual board response unverified\n",actual,max_temperature);
     }
     assert(test_critical_depth == 0);
-    puts("PASS 40 C PI, fresh cadence, anti-windup/5% limit, independent stale guard, faults/manual stop/45 C latch, tick wrap, ESC isolation");
+    puts("PASS 40 C PI (120/15), fresh cadence, anti-windup/15% limit, independent stale guard, faults/manual stop/45 C latch, tick wrap, ESC isolation");
     return 0;
 }

@@ -1,6 +1,7 @@
 """Check new H723 fields through unchanged F407 storage/converter fixtures.
 
-Run after H723 tests/pid_tuning/run.ps1 and F407 tests/run.cmd.
+Run after H723 tests/pid_tuning/run.ps1 and the archived F407 tests/run.cmd.
+The receiver moved to references; --receiver-directory supports isolated fixtures.
 This validates wire/log/CSV data, not hardware SPI or SD timing.
 """
 from pathlib import Path
@@ -9,9 +10,13 @@ import struct
 import sys
 import tempfile
 import re
+import argparse
 
 root = Path(__file__).resolve().parents[1]
-receiver = root.parent / "STM32F407VET6黑匣子"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--receiver-directory", type=Path,
+                    default=root.parent / "references" / "STM32F407VET6黑匣子(弃用）")
+receiver = parser.parse_args().receiver_directory.resolve()
 sys.path.insert(0, str(receiver / "tools"))
 import blackbox_to_csv as converter
 

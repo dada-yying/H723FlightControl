@@ -95,6 +95,38 @@ Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没�
 
 ## 验证
 
+### C0a 测试入口与温控预期（2026-10-25）
+
+本节说明当前测试执行方式；本文其余旧 ATOM/坐标/滤波说明尚待 C1 整理，不能据其判断当前控制实现。
+在 STM32H723 目录执行 `./tests/pid_tuning/run.ps1` 和 `./tests/run_sd.ps1`。
+两个入口均逐项记录编译与运行，单项失败不阻止后续独立项目；依赖失败的项目标为
+`NOT_EXECUTED`，不运行旧 exe/fixture。失败或未完成验证最终返回非零，日志与
+`summary.json`、`summary.txt` 位于打印的输出目录。
+
+可用 `-OutputDirectory <目录>` 指定输出；PID 默认 `tests/build/pid-tuning-<唯一标识>`，
+SD 默认 `tests/build/sd-<唯一标识>`。PID 始终尝试原 12 项及 `test_blackbox_extra`，
+包括 heater 之后的 attitude 和扩展字段。RC 安全专项仍未迁移/纳入执行（C0b 未批准），
+汇总以 `KNOWN_FAILURE_UNRESOLVED` 单独保留 F4；不是本次重新执行结果。
+因此即使其余 13 项均通过，PID 入口仍返回 1，不代表 C0a 把该既有失败修复了。
+
+F407 已迁至 `../references/STM32F407VET6黑匣子(弃用）`；两个入口接受
+`-ReceiverDirectory <目录>`，默认使用这一实际位置。PID 线包输出到该目录的 `tests/build`，
+SD 从该目录的 `tools/blackbox_to_csv.py` 调用未修改的转换器。
+`python -B tests/verify_bmi088_blackbox.py --receiver-directory <目录>` 可核验新生成的跨项目
+fixtures；它不自动生成 F407 接收日志。归档的 F407 入口仍有原目录布局假设，完整跨项目
+运行应使用保持其源码不变的隔离布局，不能把历史 integration BIN 当作本次新结果。
+
+温控测试固定已确认需求：KP=120 CCR/°C、KI=15 CCR/(°C·s)、MAX_CCR=1500，
+ARR+1=10000（上限15%），目标40°C、超温45°C。独立预期：39°C首拍 P=120/I=0；
+20ms后 I=0.3，120.3四舍五入仍为120；50ms后 I=0.75，120.75舍入为121。
+20°C时 P=2400，限幅1500且积分不向饱和方向累积。超时、锁存、恢复、失败、回绕和
+电调隔离断言保留。测试没有调用生产计算助手生成预期。
+
+热模型保持原参数：环境25°C、增益500°C/单位占空比、时间常数10s、步长20ms、
+测量0.125°C量化并保持1.28s。5%对应模型平衡50°C，15%对应100°C，40°C需3%；
+该500系数是热模型增益，不能替换成CCR上限1500。原收敛/峰值容差保持不变；
+此模型不证明实板温控性能。本批未修改生产代码、控制行为或转换器算法。
+
 陷波专项参数、更新率校正、Watch 和测试说明见 ../../GYRO_NOTCH.md。
 
 运行 `tests/pid_tuning/run.ps1`：用 MSVC 编译实际 rc_sbus、flight_control、vofa 源码，
@@ -124,7 +156,7 @@ test_vofa_esc.c 编译真实 esc_pwm 和 vofa，检查四路限幅、PWM 映射�
 
 ## 光流扩展回归
 
-见 ../../OPTICAL_FLOW.md。test_optical_flow.c 检查任意分片、粘包、噪声、错误帧、未知消息、整数边界、缓存/DMA 回绕、重复事件、队列溢出、UART 恢复/重试、tick 回绕及年龄饱和。运行 run.ps1 会输出 H723 真实组帧文件到 F407 tests/build/h723_wire.bin；随后运行 F407 tests/run.cmd 或直接 tests/run_cross.ps1，验证真实接收代码和 FatFs 写出的多分段文件，再由 Python 逐字段恢复。该测试不代替实机 DMA/缓存时序和 SD 卡可靠性验证。
+见 ../../OPTICAL_FLOW.md。test_optical_flow.c 检查任意分片、粘包、噪声、错误帧、未知消息、整数边界、缓存/DMA 回绕、重复事件、队列溢出、UART 恢复/重试、tick 回绕及年龄饱和。run.ps1 输出 H723 真实组帧文件到上述 ReceiverDirectory 的 tests/build/h723_wire.bin。完整 F407 接收/FatFs/转换验证仍需另行运行其测试，并遵守本节关于归档路径与新 fixtures 的说明。该测试不代替实机 DMA/缓存时序和 SD 卡可靠性验证。
 ## BMI088 logging tests
 
 `test_bmi088.c` exercises the production acquisition module with a register/SPI
