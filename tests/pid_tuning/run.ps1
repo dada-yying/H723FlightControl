@@ -11,7 +11,7 @@ try {
     $crossDir=Join-Path $ReceiverDirectory 'tests/build'
     New-Item -ItemType Directory -Path $crossDir -Force | Out-Null
     $crossDir=(Resolve-Path $crossDir).Path
-    foreach($name in @('test_tuning','test_notch','test_vofa_esc','test_blackbox',
+    foreach($name in @('test_tuning','test_notch','test_vofa_esc','test_esc_arming','test_blackbox',
         'test_blackbox_schedule','test_optical_flow','test_optical_diag','test_bmi088',
         'test_bmi088_gyro_filter','test_bmi088_filter_response','test_bmi088_heater','test_bmi088_attitude','test_blackbox_extra')) {
         $source=if($name -eq 'test_blackbox_extra'){'test_blackbox'}else{$name}
@@ -20,9 +20,15 @@ try {
             'test_blackbox' {Join-Path $crossDir 'h723_v3_wire.bin'}
             'test_blackbox_extra' {Join-Path $crossDir 'h723_v3_extra.bin'}
             'test_bmi088_filter_response' {Join-Path $suite.output 'bmi088-filter-response.csv'}
+            'test_esc_arming' {Join-Path $suite.output 'esc-arming-normal-trace.csv'}
             default {Join-Path $crossDir 'h723_wire.bin'}
         }
         $compile='call "{0}" >nul && cl /nologo /TC /std:c11 /D_CRT_SECURE_NO_WARNINGS {1} /I tests\pid_tuning\stubs tests\pid_tuning\{2}.c /Fo:"{3}\{4}.o" /Fe:"{3}\{4}.exe"' -f $VcVars,$define,$source,$suite.output,$name
+        if($name -eq 'test_esc_arming') {
+            # Compile the exact current ESC source with one removable observer.
+            # The local RTOS model defers the timeout task until critical exit.
+            $compile='call "{0}" >nul && python -B tests/pid_tuning/prepare_esc_arming.py "{1}" && cl /nologo /TC /std:c11 /D_CRT_SECURE_NO_WARNINGS /Itests/pid_tuning/stubs /IApp /I"{1}" tests/pid_tuning/test_esc_arming.c /Fo:"{1}/test_esc_arming.o" /Fe:"{1}/test_esc_arming.exe"' -f $VcVars,$suite.output
+        }
         $run='"{0}\{1}.exe" "{2}"' -f $suite.output,$name,$fixture
         $null=Invoke-HostCase $suite $name $compile $run -EnvironmentProblem $compilerProblem
     }

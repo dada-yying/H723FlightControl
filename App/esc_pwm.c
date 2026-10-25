@@ -148,7 +148,11 @@ void EscPwm_SetMixedNormalized(const float motor_command[ESC_PWM_MOTOR_COUNT])
 
 void EscPwm_ForceMinimum(EscPwmInhibitReason_t reason)
 {
+    /* Runtime task writers use the same transaction as RC arming. Startup
+     * calls the internal helper directly, before the scheduler exists. */
+    taskENTER_CRITICAL();
     EscPwm_ForceMinimumInternal(reason, 1U);
+    taskEXIT_CRITICAL();
 }
 
 uint8_t EscPwm_IsArmed(void)
@@ -158,10 +162,10 @@ uint8_t EscPwm_IsArmed(void)
 
 void EscPwm_Disarm(void)
 {
-    EscPwm_ForceMinimumInternal(ESC_PWM_INHIBIT_SWITCH_LOCKED, 1U);
+    EscPwm_ForceMinimum(ESC_PWM_INHIBIT_SWITCH_LOCKED);
 }
 
-void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
+static void EscPwm_UpdateFromRcLocked(const RcSbusData_t *rc_data)
 {
     uint32_t now;
     uint32_t valid_age;
@@ -241,6 +245,17 @@ void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
     }
 
     /* FlightControlTask owns motor output after arming. */
+}
+
+void EscPwm_UpdateFromRc(const RcSbusData_t *rc_data)
+{
+    /* Keep qualification checks AND the commit indivisible with respect to
+     * FlightControlTask's newer safety lock. A pending timeout runs after
+     * unmasking and therefore wins. Only scalar checks and minimum CCR writes
+     * are inside; PWM startup, control/mixing and peripheral waits stay outside. */
+    taskENTER_CRITICAL();
+    EscPwm_UpdateFromRcLocked(rc_data);
+    taskEXIT_CRITICAL();
 }
 
 void EscPwm_GetState(EscPwmState_t *state)

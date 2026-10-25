@@ -95,6 +95,18 @@ Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没�
 
 ## 验证
 
+### A1 解锁事务专项（2026-10-25）
+
+`run.ps1` 新增 `test_esc_arming`，当前实际尝试14项，另保留F4/C0b未解决注册项。
+专项编译真实ESC和FlightControl实现；生成器仅在实际ESC提交前插入一个观察点，移除后
+逐字节还原原源文件，`esc_arming_source.json` 保存来源SHA256。RTOS模型只在临界区深度为0时
+执行超时任务，锁内请求延后至最外层退出；不强行在不可抢占位置调用锁定。
+覆盖超时在检查前/原检查提交窗口/提交后、传感器恢复但没有重新解锁、中位/高位/低油门/
+启动门控，并检查四路命令、脉宽和模拟CCR。2019行正常输入轨迹包含原有failsafe、lost、
+99/100ms、tick回绕、PWM映射及2000周期有限控制输入，保留作旧/新逐字节比较。
+输出轨迹在本次入口目录的 `esc-arming-normal-trace.csv`；新专项不迁移旧 `test_rc_safety.c`。
+模型和ARM静态检查不证明板上临界区时长、PWM更新时刻或飞行安全；A1没有改F2/F3。
+
 ### C0a 测试入口与温控预期（2026-10-25）
 
 本节说明当前测试执行方式；本文其余旧 ATOM/坐标/滤波说明尚待 C1 整理，不能据其判断当前控制实现。
@@ -104,10 +116,10 @@ Watch 逐个写入时，每个新样本会校验当时读到的一组 q/r；没�
 `summary.json`、`summary.txt` 位于打印的输出目录。
 
 可用 `-OutputDirectory <目录>` 指定输出；PID 默认 `tests/build/pid-tuning-<唯一标识>`，
-SD 默认 `tests/build/sd-<唯一标识>`。PID 始终尝试原 12 项及 `test_blackbox_extra`，
+SD 默认 `tests/build/sd-<唯一标识>`。C0a执行原12项及 `test_blackbox_extra`；A1增加上述专项，
 包括 heater 之后的 attitude 和扩展字段。RC 安全专项仍未迁移/纳入执行（C0b 未批准），
 汇总以 `KNOWN_FAILURE_UNRESOLVED` 单独保留 F4；不是本次重新执行结果。
-因此即使其余 13 项均通过，PID 入口仍返回 1，不代表 C0a 把该既有失败修复了。
+因此即使实际尝试项目均通过，PID 入口仍返回1，不代表C0a或A1把该既有失败修复了。
 
 F407 已迁至 `../references/STM32F407VET6黑匣子(弃用）`；两个入口接受
 `-ReceiverDirectory <目录>`，默认使用这一实际位置。PID 线包输出到该目录的 `tests/build`，
