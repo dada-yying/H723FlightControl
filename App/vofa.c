@@ -10,6 +10,74 @@
 
 volatile VofaTxStats_t g_vofa_tx_stats;
 
+/* One in-flight frame, owned until UART TC (not merely DMA TC). Never DMA
+ * from the caller's stack/DTCM. Three exclusive 32-byte cache lines. */
+__attribute__((section(".vofa_dma"), aligned(32)))
+static uint8_t s_vofa_dma_frame[VOFA_FLIGHT_FRAME_SIZE];
+enum { VOFA_TX_IDLE, VOFA_TX_BUSY, VOFA_TX_RECOVER, VOFA_TX_ABORTING };
+static volatile uint8_t s_vofa_tx_state;
+static uint32_t s_vofa_start_tick;
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart)
+{
+    uint32_t duration;
+    if (uart != &huart1 || s_vofa_tx_state != VOFA_TX_BUSY) return;
+    duration = HAL_GetTick() - s_vofa_start_tick;
+    if (duration > g_vofa_tx_stats.max_duration_ms) g_vofa_tx_stats.max_duration_ms = duration;
+    g_vofa_tx_stats.success_count++;
+    g_vofa_tx_stats.last_status = HAL_OK;
+    s_vofa_tx_state = VOFA_TX_IDLE;
+    g_vofa_tx_stats.busy = 0U;
+}
+
+void VOFA_OnUartError(UART_HandleTypeDef *uart)
+{
+    if (uart != &huart1 || s_vofa_tx_state != VOFA_TX_BUSY) return;
+    g_vofa_tx_stats.failure_count++;
+    g_vofa_tx_stats.dma_error_count++;
+    g_vofa_tx_stats.last_uart_error = uart->ErrorCode;
+    g_vofa_tx_stats.last_status = HAL_ERROR;
+    s_vofa_tx_state = VOFA_TX_RECOVER; /* Only task context aborts/reuses buffer. */
+}
+
+static HAL_StatusTypeDef VOFA_Service(void)
+{
+    HAL_StatusTypeDef status;
+    taskENTER_CRITICAL();
+    /* Completion callbacks have priority over the task-side deadline. */
+    if (s_vofa_tx_state == VOFA_TX_BUSY &&
+        (uint32_t)(HAL_GetTick() - s_vofa_start_tick) >= VOFA_UART_TIMEOUT_MS) {
+        g_vofa_tx_stats.timeout_count++;
+        g_vofa_tx_stats.failure_count++;
+        g_vofa_tx_stats.last_status = HAL_TIMEOUT;
+        s_vofa_tx_state = VOFA_TX_RECOVER;
+    }
+    if (s_vofa_tx_state != VOFA_TX_RECOVER) {
+        status = s_vofa_tx_state == VOFA_TX_IDLE ? HAL_OK : HAL_BUSY;
+        taskEXIT_CRITICAL();
+        return status;
+    }
+    s_vofa_tx_state = VOFA_TX_ABORTING;
+    taskEXIT_CRITICAL();
+    /* HAL disables TX DMA/TC interrupts, stops the stream and clears its flags.
+     * A failed abort retains ownership: never overwrite potentially live DMA. */
+    status = HAL_UART_AbortTransmit(&huart1);
+    taskENTER_CRITICAL();
+    if (status == HAL_OK) {
+        HAL_NVIC_ClearPendingIRQ(DMA1_Stream4_IRQn);
+        HAL_NVIC_ClearPendingIRQ(USART1_IRQn);
+        s_vofa_tx_state = VOFA_TX_IDLE;
+        g_vofa_tx_stats.busy = 0U;
+        g_vofa_tx_stats.recovery_count++;
+    } else {
+        s_vofa_tx_state = VOFA_TX_RECOVER;
+        g_vofa_tx_stats.abort_failure_count++;
+        g_vofa_tx_stats.last_status = status;
+    }
+    taskEXIT_CRITICAL();
+    return status;
+}
+
 static void VOFA_PackChannels(uint8_t *frame, const float *channels, uint32_t channel_count)
 {
     static const uint8_t justfloat_tail[VOFA_JUSTFLOAT_TAIL_SIZE] =
@@ -21,16 +89,44 @@ static void VOFA_PackChannels(uint8_t *frame, const float *channels, uint32_t ch
 
 static HAL_StatusTypeDef VOFA_Transmit(const uint8_t *frame, uint16_t size)
 {
-    uint32_t start_tick, duration_ms;
     HAL_StatusTypeDef status;
-    start_tick = HAL_GetTick();
-    status = HAL_UART_Transmit(&huart1, frame, size, VOFA_UART_TIMEOUT_MS);
-    duration_ms = HAL_GetTick() - start_tick;
-    g_vofa_tx_stats.last_status = status;
-    if (status == HAL_OK) g_vofa_tx_stats.success_count++;
-    else g_vofa_tx_stats.failure_count++;
-    if (duration_ms > g_vofa_tx_stats.max_duration_ms)
-        g_vofa_tx_stats.max_duration_ms = duration_ms;
+    if (huart1.hdmatx == NULL) {
+        g_vofa_tx_stats.failure_count++;
+        g_vofa_tx_stats.last_status = HAL_ERROR;
+        return HAL_ERROR;
+    }
+    status = VOFA_Service();
+    if (status != HAL_OK) {
+        g_vofa_tx_stats.busy_drop_count++;
+        return status;
+    }
+    taskENTER_CRITICAL();
+    if (s_vofa_tx_state != VOFA_TX_IDLE) {
+        g_vofa_tx_stats.busy_drop_count++;
+        taskEXIT_CRITICAL();
+        return HAL_BUSY;
+    }
+    s_vofa_tx_state = VOFA_TX_BUSY;
+    g_vofa_tx_stats.busy = 1U;
+    memcpy(s_vofa_dma_frame, frame, size);
+    taskEXIT_CRITICAL();
+    if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+        SCB_CleanDCache_by_Addr((uint32_t *)s_vofa_dma_frame, sizeof(s_vofa_dma_frame));
+    __DSB();
+    s_vofa_start_tick = HAL_GetTick();
+    g_vofa_tx_stats.last_status = HAL_OK;
+    status = HAL_UART_Transmit_DMA(&huart1, s_vofa_dma_frame, size);
+    if (status == HAL_OK) {
+        __HAL_DMA_DISABLE_IT(huart1.hdmatx, DMA_IT_HT);
+        g_vofa_tx_stats.submitted_count++;
+    }
+    else {
+        taskENTER_CRITICAL();
+        g_vofa_tx_stats.last_status = status;
+        g_vofa_tx_stats.failure_count++;
+        s_vofa_tx_state = VOFA_TX_RECOVER;
+        taskEXIT_CRITICAL();
+    }
     return status;
 }
 

@@ -3,7 +3,7 @@
 #include <string.h>
 #define __attribute__(x)
 typedef enum { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT } HAL_StatusTypeDef;
-typedef struct { void *hdmarx; uint32_t ErrorCode; } UART_HandleTypeDef;
+typedef struct { void *hdmarx; uint32_t ErrorCode; void *hdmatx; } UART_HandleTypeDef;
 static struct { uint32_t CCR; } test_scb;
 static struct { uint32_t DEMCR; } test_debug;
 static struct { uint32_t CYCCNT, CTRL; } test_dwt;
@@ -19,6 +19,9 @@ static uint8_t test_uart_bytes[128];
 static uint16_t test_uart_size;
 static uint32_t test_uart_timeout;
 static uint32_t test_uart_duration_ms, test_uart_calls;
+static uint32_t test_uart_poll_calls;
+static uint8_t test_uart_dma_auto_complete=1;
+static void (*test_uart_abort_hook)(UART_HandleTypeDef *);
 static HAL_StatusTypeDef test_uart_status = HAL_OK;
 static HAL_StatusTypeDef test_dma_status = HAL_OK, test_abort_status = HAL_OK;
 static uint32_t test_dma_calls, test_abort_calls, test_clean_calls, test_clean_size;
@@ -33,6 +36,11 @@ static uint32_t test_rx_it_calls;
 #define __HAL_DMA_GET_COUNTER(a) test_rx_remaining
 static void (*test_clean_hook)(void);
 void HAL_UART_AbortTransmitCpltCallback(UART_HandleTypeDef *uart);
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *uart);
+#define DMA1_Stream4_IRQn 4
+#define USART1_IRQn 37
+static uint32_t test_clear_pending_count;
+static void HAL_NVIC_ClearPendingIRQ(int irq) { (void)irq;test_clear_pending_count++; }
 #define __DSB() ((void)0)
 #define __DMB() ((void)0)
 #define __HAL_DMA_DISABLE_IT(a,b) ((void)0)
@@ -49,10 +57,17 @@ static HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *u) { (void)u;
 static HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *u, uint8_t *p, uint16_t n)
 { (void)u; (void)n; test_rx_it_buffer=p; test_rx_it_calls++; return test_rx_it_status; }
 static HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *u, const uint8_t *p, uint16_t n, uint32_t timeout)
-{ (void)u; memcpy(test_uart_bytes, p, n); test_uart_size=n; test_uart_timeout=timeout;
+{ (void)u; test_uart_poll_calls++;memcpy(test_uart_bytes, p, n); test_uart_size=n; test_uart_timeout=timeout;
   test_uart_calls++; test_tick+=test_uart_duration_ms; return test_uart_status; }
 static HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *u, uint8_t *p, uint16_t n)
-{ (void)u; test_dma_calls++; test_dma_source=p; test_dma_size=n; return test_dma_status; }
+{ test_dma_calls++;test_uart_calls++;test_dma_source=p;test_dma_size=n;
+  if(test_dma_status==HAL_OK) {
+    memcpy(test_uart_bytes,p,n);test_uart_size=n;test_tick+=test_uart_duration_ms;
+    if(test_uart_dma_auto_complete)HAL_UART_TxCpltCallback(u);
+  }
+  return test_dma_status; }
+static HAL_StatusTypeDef HAL_UART_AbortTransmit(UART_HandleTypeDef *u)
+{ test_abort_calls++;if(test_uart_abort_hook)test_uart_abort_hook(u);return test_abort_status; }
 static HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(UART_HandleTypeDef *u)
 { test_abort_calls++; if(test_abort_immediate && test_abort_status==HAL_OK) HAL_UART_AbortTransmitCpltCallback(u);
   return test_abort_status; }

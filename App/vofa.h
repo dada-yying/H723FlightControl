@@ -22,14 +22,20 @@ void VOFA_BuildBlackboxFrame(uint8_t frame[BLACKBOX_FLIGHT_FRAME_SIZE],
                           const FlightControlState_t *flight,
                           const RcSbusData_t *rc, const EscPwmState_t *esc,
                           const OpticalFlowData_t *optical);
+/* Task-only, nonblocking DMA submission. HAL_OK means accepted, not wire done.
+ * Caller storage may be reused immediately; busy drops the new frame. */
 HAL_StatusTypeDef VOFA_SendFrame(const uint8_t frame[VOFA_FLIGHT_FRAME_SIZE]);
+void VOFA_OnUartError(UART_HandleTypeDef *uart); /* Shared UART error dispatcher. */
 
 typedef struct
 {
     uint32_t success_count;
     uint32_t failure_count;
     HAL_StatusTypeDef last_status;
-    uint32_t max_duration_ms; /* HAL tick resolution; includes task preemption. */
+    uint32_t max_duration_ms; /* Submission -> UART TC callback, includes IRQ delay. */
+    uint32_t submitted_count, busy_drop_count, timeout_count, dma_error_count;
+    uint32_t recovery_count, abort_failure_count, last_uart_error;
+    uint8_t busy; /* Includes error recovery; buffer must remain owned. */
 } VofaTxStats_t;
 extern volatile VofaTxStats_t g_vofa_tx_stats;
 

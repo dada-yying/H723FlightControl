@@ -168,6 +168,14 @@ static void test_source_and_timing(void)
     memcpy(decoded,test_uart_bytes,sizeof(decoded));
     near_value(decoded[0],.2f); near_value(decoded[1],-.3f);
     near_value(decoded[13],4); near_value(decoded[14],5); near_value(decoded[15],6);
+    /* Exercise the actual shared callback router: USART1 error must not
+     * restart UART5 or steal its receive-fault handling. */
+    test_uart_dma_auto_complete=0;
+    assert(VOFA_SendAttitude(0,0,0)==HAL_OK);
+    s_restart_pending=0;HAL_UART_ErrorCallback(&huart1);
+    assert(!s_restart_pending && s_vofa_tx_state==VOFA_TX_RECOVER);
+    assert(VOFA_SendAttitude(0,0,0)==HAL_OK);HAL_UART_TxCpltCallback(&huart1);
+    test_uart_dma_auto_complete=1;
     FlightControl_SetTaskHandle((TaskHandle_t)7);
     calls=test_notify_calls;
     FlightControl_OnBmi088Update(1); assert(test_notify_calls==calls);

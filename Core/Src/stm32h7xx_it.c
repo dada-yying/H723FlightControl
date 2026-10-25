@@ -246,6 +246,8 @@ void DMA1_Stream3_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_spi1_rx); }
 void SPI1_IRQHandler(void) { HAL_SPI_IRQHandler(&hspi1_sd); }
 
 void DMA1_Stream2_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_usart10_rx); }
+void DMA1_Stream4_IRQHandler(void) { HAL_DMA_IRQHandler(&hdma_usart1_tx); }
+void USART1_IRQHandler(void) { HAL_UART_IRQHandler(&huart1); }
 void USART10_IRQHandler(void) { HAL_UART_IRQHandler(&huart10); }
 
 void TIM7_IRQHandler(void) { HAL_TIM_IRQHandler(&htim7); }

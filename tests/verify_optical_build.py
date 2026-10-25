@@ -8,7 +8,7 @@ root = Path(__file__).resolve().parents[1]
 directory = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "MDK-ARM/optical-flow-verified"
 mapping = (directory / "firmware.map").read_text(errors="replace")
 graph = (directory / "firmware.htm").read_text(errors="replace")
-for symbol, expected in (("of_dma", 256), ("tx_dma", 544), ("rx_dma", 544), ("s_uart5_dma_buffer", 64), ("block_words",32768)):
+for symbol, expected in (("of_dma", 256), ("tx_dma", 544), ("rx_dma", 544), ("s_uart5_dma_buffer", 64), ("block_words",32768), ("s_vofa_dma_frame",96)):
     found = re.search(r"^\s*" + symbol + r"\s+(0x[0-9a-fA-F]+)\s+Data\s+(\d+)", mapping, re.M)
     assert found, symbol
     address, size = int(found[1], 16), int(found[2])
@@ -43,7 +43,7 @@ task_heap = sum(((stack + 8 + 7) & ~7) + ((92 + 8 + 7) & ~7)
                 for stack in (1024, 1024, 512, 1024, 1024, 1024, 1024, 4096))
 assert task_heap < 15360
 print(f"Application task allocations: {task_heap}/15360 bytes; other allocations/runtime remain to check")
-for irq in ("USART10_IRQHandler", "DMA1_Stream2_IRQHandler", "TIM7_IRQHandler", "TIM4_IRQHandler", "SPI1_IRQHandler", "DMA1_Stream3_IRQHandler"):
+for irq in ("USART10_IRQHandler", "DMA1_Stream2_IRQHandler", "TIM7_IRQHandler", "TIM4_IRQHandler", "SPI1_IRQHandler", "DMA1_Stream3_IRQHandler", "USART1_IRQHandler", "DMA1_Stream4_IRQHandler"):
     assert re.search(irq + r"\s+0x[0-9a-fA-F]+.*stm32h7xx_it\.o", mapping), irq
 print("Optical flow static checks passed")
 

@@ -1,5 +1,8 @@
 # SBB3 黑匣子：H723 SPI-SD 直接记录
 
+2026-10-25：USART1 VOFA 改为 DMA1 Stream4 异步发送，帧/通道/波特率/100 Hz 不变，
+见 [VOFA_DMA.md](VOFA_DMA.md)。黑匣子 SPI-SD 存储路径不变。
+
 2026-10-24 滤波/量程更新：`bmi088_gyro_filtered_deg_s` 为三轴 120 Hz／40 Hz 陷波后
 再经 50 Hz 二阶低通的最终输出；未滤波字段不变，加速度仍为 m/s²（硬件 ±6g）。
 字段布局、schema 和转换工具未改，详见 [BMI088_FILTERS.md](BMI088_FILTERS.md)。

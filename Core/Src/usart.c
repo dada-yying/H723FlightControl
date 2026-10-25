@@ -25,6 +25,7 @@
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_tx;
 UART_HandleTypeDef huart5;
 DMA_HandleTypeDef hdma_uart5_rx;
 UART_HandleTypeDef huart10;
@@ -210,7 +211,28 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* USER CODE BEGIN USART1_MspInit 1 */
-
+    __HAL_RCC_DMA1_CLK_ENABLE();
+    hdma_usart1_tx.Instance = DMA1_Stream4;
+    hdma_usart1_tx.Init.Request = DMA_REQUEST_USART1_TX;
+    hdma_usart1_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    hdma_usart1_tx.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_usart1_tx.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_usart1_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart1_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    hdma_usart1_tx.Init.Mode = DMA_NORMAL;
+    hdma_usart1_tx.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_usart1_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    if (HAL_DMA_Init(&hdma_usart1_tx) == HAL_OK) {
+      __HAL_LINKDMA(uartHandle, hdmatx, hdma_usart1_tx);
+      HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 6, 0);
+      HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
+      HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+      HAL_NVIC_EnableIRQ(USART1_IRQn);
+    } else {
+      uartHandle->hdmatx = NULL; /* Optional telemetry failure must not stop flight. */
+      HAL_NVIC_DisableIRQ(DMA1_Stream4_IRQn);
+      HAL_NVIC_DisableIRQ(USART1_IRQn);
+    }
   /* USER CODE END USART1_MspInit 1 */
   }
   else if(uartHandle->Instance==UART5)
@@ -273,7 +295,10 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   if(uartHandle->Instance==USART1)
   {
   /* USER CODE BEGIN USART1_MspDeInit 0 */
-
+    HAL_NVIC_DisableIRQ(DMA1_Stream4_IRQn);
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+    if (uartHandle->hdmatx != NULL) (void)HAL_DMA_DeInit(uartHandle->hdmatx);
+    uartHandle->hdmatx = NULL;
   /* USER CODE END USART1_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART1_CLK_DISABLE();

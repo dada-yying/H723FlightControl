@@ -5,6 +5,7 @@
 #include "usart.h"
 #include "blackbox.h"
 #include "optical_flow.h"
+#include "vofa.h"
 
 #define RC_SBUS_FRAME_SIZE 25U
 #define RC_SBUS_FRAME_HEADER 0x0FU
@@ -359,6 +360,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    if (huart == &huart1) { VOFA_OnUartError(huart); return; }
     if (huart == &huart10) { OpticalFlow_OnError(huart); return; }
     if (huart != &huart5) return;
     /* HAL has aborted DMA. Request recovery in task context. */
