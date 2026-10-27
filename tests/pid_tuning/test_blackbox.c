@@ -63,6 +63,10 @@ static void seed_bmi(void){
     g_bmi088_attitude_state.sample_tick_ms=sample.sample_tick_ms;
     g_bmi088_attitude_state.epoch=7;g_bmi088_attitude_state.initialized=g_bmi088_attitude_state.valid=1;
     g_bmi088_attitude_state.accel_used=1;g_bmi088_attitude_state.error=BMI088_ATTITUDE_OK;
+    /* Separate controller epoch proves logging does not use the newer BMI epoch. */
+    g_flight_control_state.yaw_rad=.5f;
+    g_flight_control_state.yaw_target_rad=.6f;g_flight_control_state.yaw_error_rad=.1f;
+    g_flight_control_state.attitude_epoch=6;g_flight_control_state.yaw_hold_active=1;
 }
 /* Legacy wire fixture for the unchanged F407 tests. Production SD files get
  * their schema directly from the storage prefix, not from the sampler. */
@@ -89,7 +93,7 @@ int main(int argc,char **argv){
     Blackbox_Sample(held);
     assert(sbb_u32(held+148)==UINT32_MAX && !held[152] && !held[153]);
 #ifndef BLACKBOX_TEST_EXTRA_FIELDS
-    assert(s_payload_size==205 && test_dma_size==233 && g_blackbox_tx_stats.effective_hz==1000);
+    assert(s_payload_size==218 && test_dma_size==246 && g_blackbox_tx_stats.effective_hz==1000);
 #endif
     assert(!memcmp(expected,test_dma_source+24,80) && test_uart_size==96);
     for(i=0;i<4;i++){float motor;memcpy(&motor,test_dma_source+24+64+4*i,4);assert(motor==0);}
@@ -98,6 +102,17 @@ int main(int argc,char **argv){
     queue_reject=0;Blackbox_SendSnapshot();assert(test_dma_calls==calls+1);
     HAL_UART_ErrorCallback(&huart5);assert(s_restart_pending);s_restart_pending=0;
     reset();seed_bmi();Blackbox_Sample(held);
+    { float value;
+      memcpy(&value,held+205,4);assert(value==.6f*57.295779513f);
+      memcpy(&value,held+209,4);assert(value==.1f*57.295779513f);
+      assert(sbb_u32(held+213)==6 && held[217]==1);
+#ifdef BLACKBOX_TEST_EXTRA_FIELDS
+      assert(s_payload_size==232);
+      memcpy(&value,held+218,4);assert(value==1.25f);
+      assert(sbb_u32(held+222)==0xfffffffeU && sbb_u16(held+226)==32768U &&
+          sbb_u16(held+228)==0 && sbb_u16(held+230)==32767U);
+#endif
+    }
     { Bmi088Data_t before=g_bmi088_data;
       Bmi088Data_t after;
       Blackbox_Sample(held);

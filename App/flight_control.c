@@ -14,6 +14,10 @@
 #define FLIGHT_RATE_INTEGRAL_LIMIT 0.30f
 #define FLIGHT_IMU_TIMEOUT_MS 10U
 #define FLIGHT_DEFAULT_DT_S 0.001f
+#define FLIGHT_MOTOR_STOP_THROTTLE_RAW 0x0195U
+#define FLIGHT_PI 3.14159265358979323846f
+#define FLIGHT_YAW_HOLD_MAX_RATE_RAD_S (0.5f * FLIGHT_PI)
+#define FLIGHT_YAW_START_THROTTLE 0.05f
 /* Legacy Watch blocks remain zero/inactive; BMI088 owns the only gyro LPF. */
 volatile FlightControlNotchState_t g_flight_control_notch;
 volatile FlightControlPidConfig_t g_flight_control_pid;
@@ -39,6 +43,9 @@ static float s_last_yaw_error;
 static uint8_t s_have_error;
 static uint32_t s_last_control_tick;
 static uint8_t s_output_saturated;
+/* Flight task owns the heading; published Watch fields are observations only. */
+static float s_yaw_target, s_yaw_angle_kp;
+static uint8_t s_yaw_hold_active, s_yaw_control_started;
 
 /* 限幅函数 */
 static float FlightControl_Clamp(float value, float minimum, float maximum)
@@ -81,6 +88,24 @@ static void FlightControl_ResetController(void)
     s_output_saturated = 0U;
 }
 
+static void FlightControl_ResetYawHeading(void)
+{
+    s_yaw_target = 0.0f;
+    s_yaw_hold_active = 0U;
+    g_flight_control_state.yaw_target_rad = 0.0f;
+    g_flight_control_state.yaw_error_rad = 0.0f;
+    g_flight_control_state.yaw_hold_active = 0U;
+}
+
+/* Both operands are AHRS angles in [-pi, pi]; one wrap suffices. */
+static float FlightControl_YawError(float target, float measured)
+{
+    float error = target - measured;
+    if (error >= FLIGHT_PI) error -= 2.0f * FLIGHT_PI;
+    else if (error < -FLIGHT_PI) error += 2.0f * FLIGHT_PI;
+    return error;
+}
+
 /* Called by the BMI task after coherent publication and acquisition bookkeeping.
  * Notify every two successful reads; faults wake control immediately. */
 void FlightControl_OnBmi088Update(uint8_t valid)
@@ -104,6 +129,8 @@ void FlightControl_Init(void)
     (void)memset((void *)&g_flight_control_tuning, 0, sizeof(g_flight_control_tuning));
     s_tuning_active = 0U;
     s_previous_armed = 0U;
+    s_yaw_control_started = 0U;
+    s_yaw_angle_kp = 1.0f;
     s_selected_axis = RC_TUNING_ROLL;
     s_waiting_center = 1U;
     s_center_after_frame = 0U;
@@ -114,14 +141,27 @@ void FlightControl_Init(void)
     s_have_cycle = 0U;
     s_last_control_tick = HAL_GetTick();
     FlightControl_ResetController();
+    FlightControl_ResetYawHeading();
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    g_flight_control_pid.angle_roll.kp = 3.5;
-    g_flight_control_pid.angle_pitch.kp = 3.5;
-    g_flight_control_pid.rate_roll.kp = 0.15;
-    g_flight_control_pid.rate_pitch.kp = 0.15;
-    g_flight_control_pid.rate_yaw.kp = 0.3;
+
+    g_flight_control_pid.angle_roll.kp = 3.5f;
+    g_flight_control_pid.angle_pitch.kp = 3.5f;
+    g_flight_control_pid.angle_yaw.kp = 1.0f;
+
+    g_flight_control_pid.rate_roll.kp = 0.158f;
+    g_flight_control_pid.rate_roll.ki = 0.00000002f;
+    g_flight_control_pid.rate_roll.kd = 0.002f;
+
+    g_flight_control_pid.rate_pitch.kp = 0.158f;
+    g_flight_control_pid.rate_pitch.ki = 0.00000002f;
+    g_flight_control_pid.rate_pitch.kd = 0.002f;
+
+    g_flight_control_pid.rate_yaw.kp = 0.3f;
+    // g_flight_control_pid.rate_yaw.ki = 0.0f;
+    // g_flight_control_pid.rate_yaw.kd = 0.0f;
+
 }
 
 void FlightControl_SetTaskHandle(TaskHandle_t task_handle)
@@ -150,6 +190,8 @@ void FlightControl_Run(void)
 
     Bmi088_GetSnapshotWithFilter(&imu, &filter, &attitude);
     RcSbus_GetData(&rc);
+//    rc.roll_target_rad += 0.02164208f;      // 校准imu的roll轴偏差
+//    rc.pitch_target_rad += 0.05740388f;     // 校准imu的pitch轴偏差
     valid = (uint8_t)(imu.valid && imu.initialized && imu.has_sample &&
         filter.valid && filter.initialized && attitude.valid && attitude.initialized &&
         imu.age_ms < FLIGHT_IMU_TIMEOUT_MS &&
@@ -171,11 +213,13 @@ void FlightControl_Run(void)
         if (!(dt >= 0.0002f && dt < 0.010f)) valid = 0U;
     } else {
         FlightControl_ResetController();
+        FlightControl_ResetYawHeading(); /* Initial sample or new relative-yaw epoch. */
     }
     if (valid) {
         s_last_cycle = imu.completion_cycle;
         s_sample_count = imu.sample_count;
         s_attitude_epoch = attitude.epoch;
+        g_flight_control_state.attitude_epoch = attitude.epoch;
         s_have_cycle = 1U;
         g_flight_control_state.dt_s = dt;
         g_flight_control_state.control_hz = (uint32_t)(1.0f / dt + 0.5f);
@@ -219,6 +263,10 @@ void FlightControl_Run(void)
             (rc.tuning_rate_rad_s == 0.0f))
             s_waiting_center = 0U;
     }
+    if (!g_flight_control_state.armed || !s_previous_armed || s_tuning_active) {
+        FlightControl_ResetYawHeading();
+        s_yaw_control_started = 0U;
+    }
     s_previous_armed = g_flight_control_state.armed;
     g_flight_control_tuning.active = s_tuning_active;
     g_flight_control_tuning.selected_axis = (uint8_t)s_selected_axis;
@@ -237,6 +285,8 @@ void FlightControl_Run(void)
         else if ((now - rc.last_valid_tick) >= 100U)
             reason = ESC_PWM_INHIBIT_RC_TIMEOUT;
         FlightControl_ResetController();
+        FlightControl_ResetYawHeading();
+        s_yaw_control_started = 0U;
         EscPwm_ForceMinimum(reason);
         s_previous_armed = 0U;
         s_waiting_center = 1U;
@@ -253,6 +303,22 @@ void FlightControl_Run(void)
 
     s_last_control_tick = now;
 
+    /* Low GOOD-frame CH3 inhibits all motor commands, including tuning/PID
+     * corrections. Preserve arming; a raised throttle resumes normal control. */
+    if (rc.accepted_throttle_raw < FLIGHT_MOTOR_STOP_THROTTLE_RAW) {
+        FlightControl_ResetController();
+        FlightControl_ResetYawHeading();
+        s_yaw_control_started = 0U;
+        g_flight_control_state.roll_rate_target_rad_s = 0.0f;
+        g_flight_control_state.pitch_rate_target_rad_s = 0.0f;
+        g_flight_control_state.yaw_rate_target_rad_s = 0.0f;
+        for (motor_index = 0U; motor_index < ESC_PWM_MOTOR_COUNT; motor_index++)
+            g_flight_control_state.motor_command[motor_index] = 0.0f;
+        EscPwm_SetAllNormalized(0.0f);
+        g_flight_control_state.running = 1U;
+        return;
+    }
+
     roll_target_rate = FlightControl_Clamp(
         g_flight_control_pid.angle_roll.kp * (rc.roll_target_rad - g_flight_control_state.roll_rad),
         -FLIGHT_MAX_RATE_TARGET_RAD_S, FLIGHT_MAX_RATE_TARGET_RAD_S);
@@ -262,6 +328,34 @@ void FlightControl_Run(void)
     g_flight_control_state.roll_rate_target_rad_s = roll_target_rate;
     g_flight_control_state.pitch_rate_target_rad_s = pitch_target_rate;
     g_flight_control_state.yaw_rate_target_rad_s = rc.yaw_rate_target_rad_s;
+
+    if (!s_tuning_active && g_flight_control_state.armed) {
+        const float requested_kp = g_flight_control_pid.angle_yaw.kp;
+        if (FlightControl_Finite(requested_kp) && requested_kp >= 0.0f)
+            s_yaw_angle_kp = requested_kp;
+        /* Ground pre-start: do not capture a heading until throttle first rises.
+         * Once enabled, low throttle in flight must not recapture the heading. */
+        if (rc.throttle > FLIGHT_YAW_START_THROTTLE) s_yaw_control_started = 1U;
+        if (rc.yaw_rate_target_rad_s != 0.0f) {
+            FlightControl_ResetYawHeading(); /* Stick commands rate directly. */
+        } else if (s_yaw_control_started) {
+            /* Only a good centered frame can start a new hold. Lost frames
+             * retain an existing hold, just like the existing RC target policy. */
+            if (!s_yaw_hold_active && !rc.frame_lost) {
+                s_yaw_target = attitude.yaw_rad;
+                s_yaw_hold_active = 1U;
+            }
+            if (s_yaw_hold_active) {
+                const float error = FlightControl_YawError(s_yaw_target, attitude.yaw_rad);
+                g_flight_control_state.yaw_target_rad = s_yaw_target;
+                g_flight_control_state.yaw_error_rad = error;
+                g_flight_control_state.yaw_hold_active = 1U;
+                g_flight_control_state.yaw_rate_target_rad_s = FlightControl_Clamp(
+                    s_yaw_angle_kp * error,
+                    -FLIGHT_YAW_HOLD_MAX_RATE_RAD_S, FLIGHT_YAW_HOLD_MAX_RATE_RAD_S);
+            }
+        }
+    }
 
     if (s_tuning_active != 0U)
     {
@@ -327,6 +421,8 @@ void FlightControl_OnTaskTimeout(void)
     {
         s_have_cycle = 0U;
         FlightControl_ResetController();
+        FlightControl_ResetYawHeading();
+        s_yaw_control_started = 0U;
         EscPwm_ForceMinimum(ESC_PWM_INHIBIT_IMU_TIMEOUT);
         s_previous_armed = 0U;
         s_waiting_center = 1U;

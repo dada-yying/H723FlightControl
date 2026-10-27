@@ -48,12 +48,14 @@ static void arm(void)
 {
     RcSbusData_t rc;
     g_rc_sbus_data.throttle=0;
+    g_rc_sbus_data.accepted_throttle_raw=348;
     g_rc_sbus_data.channel[6]=1000;
     RcSbus_GetData(&rc); EscPwm_UpdateFromRc(&rc);
     g_rc_sbus_data.channel[6]=1696;
     RcSbus_GetData(&rc); EscPwm_UpdateFromRc(&rc);
     assert(EscPwm_IsArmed());
     g_rc_sbus_data.throttle=.5f;
+    g_rc_sbus_data.accepted_throttle_raw=1022;
 }
 /* Feed actual SBUS parser including calibrated endpoints and candidate debounce. */
 static void frame(unsigned ch1,unsigned ch2,unsigned ch4,unsigned axis,unsigned slider,unsigned flags)
@@ -61,7 +63,9 @@ static void frame(unsigned ch1,unsigned ch2,unsigned ch4,unsigned axis,unsigned 
     uint8_t b[25]={0};
     uint16_t ch[16]={0};
     unsigned c,k;
-    ch[0]=(uint16_t)ch1; ch[1]=(uint16_t)ch2; ch[2]=348;
+    /* These direction/tuning fixtures exercise enabled control. Low throttle
+     * and exact raw boundaries are covered by test_throttle_stop.c. */
+    ch[0]=(uint16_t)ch1; ch[1]=(uint16_t)ch2; ch[2]=1022;
     ch[3]=(uint16_t)ch4; ch[4]=(uint16_t)axis; ch[6]=1000; ch[9]=(uint16_t)slider;
     b[0]=15; b[23]=(uint8_t)flags;
     for(c=0;c<16;c++) for(k=0;k<11;k++)
@@ -120,8 +124,12 @@ static void test_restoring(void)
         if(kind) {
             g_flight_control_pid.angle_roll.kp=1;
             g_flight_control_pid.angle_pitch.kp=1;
-            if(axis==0) g_bmi088_attitude_state.roll_rad=value;
-            else g_bmi088_attitude_state.pitch_rad=value;
+            /* Current board's user-selected neutral trim. Perturb one axis
+             * around its target so the other axis should generate no torque. */
+            g_bmi088_attitude_state.roll_rad=.00959931f;
+            g_bmi088_attitude_state.pitch_rad=.01780236f;
+            if(axis==0) g_bmi088_attitude_state.roll_rad+=value;
+            else g_bmi088_attitude_state.pitch_rad+=value;
         } else g_bmi088_gyro_filter.gyro_rad_s[axis]=value;
         FlightControl_Run(); torques(moment);
         assert(g_flight_control_state.running && g_flight_control_state.imu_valid);

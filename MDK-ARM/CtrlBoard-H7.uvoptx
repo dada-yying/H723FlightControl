@@ -233,7 +233,7 @@
         <Ww>
           <count>15</count>
           <WinNumber>1</WinNumber>
-          <ItemText>g_rc_sbus_data.channel[9]</ItemText>
+          <ItemText>g_rc_sbus_data.channel[2]</ItemText>
         </Ww>
         <Ww>
           <count>16</count>
@@ -329,41 +329,6 @@
           <count>34</count>
           <WinNumber>1</WinNumber>
           <ItemText>g_bmi088_heater_state.stop_reason</ItemText>
-        </Ww>
-        <Ww>
-          <count>35</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.revision</ItemText>
-        </Ww>
-        <Ww>
-          <count>36</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.io_fault.complete</ItemText>
-        </Ww>
-        <Ww>
-          <count>37</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.state</ItemText>
-        </Ww>
-        <Ww>
-          <count>38</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.data_written</ItemText>
-        </Ww>
-        <Ww>
-          <count>39</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_blackbox_stats.queue_used</ItemText>
-        </Ww>
-        <Ww>
-          <count>40</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.dma_to_irq_max_cycles</ItemText>
-        </Ww>
-        <Ww>
-          <count>41</count>
-          <WinNumber>1</WinNumber>
-          <ItemText>g_sd_spi_diag.dma_resume_max_cycles</ItemText>
         </Ww>
       </WatchWindow1>
       <MemoryWindow1>
@@ -868,7 +833,7 @@
 
   <Group>
     <GroupName>App</GroupName>
-    <tvExp>0</tvExp>
+    <tvExp>1</tvExp>
     <tvExpOptDlg>0</tvExpOptDlg>
     <cbSel>0</cbSel>
     <RteFlg>0</RteFlg>

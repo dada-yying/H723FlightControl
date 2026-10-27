@@ -24,6 +24,7 @@ typedef struct
     FlightControlPidAxis_t rate_roll;
     FlightControlPidAxis_t rate_pitch;
     FlightControlPidAxis_t rate_yaw;
+    FlightControlPidAxis_t angle_yaw; /* Hold P only, kp in 1/s; ki/kd unused. */
 } FlightControlPidConfig_t;
 
 typedef struct
@@ -49,6 +50,10 @@ typedef struct
     float roll_rate_raw_rad_s; /* Calibrated unfiltered BMI native X, rad/s. */
     float pitch_rate_raw_rad_s; /* Calibrated unfiltered BMI native Y, rad/s. */
     float yaw_rate_raw_rad_s; /* Calibrated unfiltered BMI native Z, rad/s. */
+    float yaw_target_rad; /* Captured actual RFU yaw; valid only while holding. */
+    float yaw_error_rad; /* Shortest target-minus-actual angle, [-pi, pi). */
+    uint32_t attitude_epoch; /* Reference epoch for this control snapshot. */
+    uint8_t yaw_hold_active; /* Observation only: no external target writes. */
 } FlightControlState_t;
 
 extern volatile FlightControlPidConfig_t g_flight_control_pid;

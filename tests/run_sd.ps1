@@ -1,4 +1,5 @@
-param([string]$VcVars='D:\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat')
+param([string]$VcVars='D:\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat',
+      [string]$Converter=(Join-Path $PSScriptRoot '../../STM32F407VET6黑匣子/tools/blackbox_to_csv.py'))
 $ErrorActionPreference='Stop'
 Push-Location (Join-Path $PSScriptRoot '..')
 try {
@@ -21,10 +22,12 @@ try {
         Run-Cl "$def /Itests/pid_tuning/stubs tests/pid_tuning/test_blackbox.c /Fo:tests/build/sender_$name.o /Fe:tests/build/sender_$name.exe" "tests\build\sender_$name.exe tests\build\sd_$name.wire"
         & tests/build/test_sd_storage.exe "tests/build/sd_$name.wire" "tests/build/sd_$name.bin"
         if($LASTEXITCODE -ne 0){throw "SD storage test failed"}
-        & python -B ../STM32F407VET6黑匣子/tools/blackbox_to_csv.py "tests/build/sd_$name.bin" -o "tests/build/sd_$name.csv" --report "tests/build/sd_$name.json"
+        & python -B $Converter "tests/build/sd_$name.bin" -o "tests/build/sd_$name.csv" --report "tests/build/sd_$name.json"
         if($LASTEXITCODE -ne 0){throw "Converter failed"}
         $report=Get-Content "tests/build/sd_$name.json" -Raw | ConvertFrom-Json
         if($report.decoded_records -ne 2000 -or $report.undecoded_records -ne 0 -or $report.bad_data -ne 0 -or $report.bad_schema_fragments -ne 0){throw 'Round-trip mismatch'}
+        & python -B tests/verify_yaw_blackbox.py @($report.outputs)
+        if($LASTEXITCODE -ne 0){throw 'Yaw field round-trip mismatch'}
     }
     Run-Cl '/Itests/pid_tuning/stubs tests/pid_tuning/test_blackbox_schedule.c /Fo:tests/build/schedule.o /Fe:tests/build/schedule.exe' 'tests\build\schedule.exe'
     Run-Cl '/DBB_HOST_TEST /DBB_FILE_BYTES=41943040 /DBB_MAX_FILE_BYTES=67108864 /DBB_DIAGNOSTIC_MS=0 /Itests/pid_tuning/stubs /IApp /IApp/storage /IMiddlewares/Third_Party/FatFs/src tests/test_sd_storage.c Middlewares/Third_Party/FatFs/src/ff.c /Fo:tests/build/ /Fe:tests/build/reserve.exe' 'tests\build\reserve.exe tests\build\sd_base.wire tests\build\reserve.bin'

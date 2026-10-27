@@ -53,8 +53,13 @@ static const BlackboxField s_fields[] = {
     BF("bmi088_gyro_filter_valid","",196,1,SBB_U8),
     BF("bmi088_gyro_filter_cutoff_hz","Hz",197,1,SBB_F32),
     BF("bmi088_gyro_filter_sample_hz","Hz",201,1,SBB_F32),
+    /* Capture/feedback below share the FlightControl snapshot, not a newer BMI read. */
+    BF("yaw_target_deg","deg",205,1,SBB_F32),
+    BF("yaw_error_deg","deg",209,1,SBB_F32),
+    BF("flight_attitude_epoch","",213,1,SBB_U32),
+    BF("yaw_hold_active","",217,1,SBB_U8),
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    BF("new_float","test",205,1,SBB_F32), BF("new_uint32","test",209,1,SBB_U32), BF("new_array","test",213,3,SBB_I16),
+    BF("new_float","test",218,1,SBB_F32), BF("new_uint32","test",222,1,SBB_U32), BF("new_array","test",226,3,SBB_I16),
 #endif
 };
 #undef BF
@@ -123,9 +128,13 @@ static void Blackbox_Sample(uint8_t *payload)
      * cutoff_hz remains the LPF cutoff, not the notch center. */
     payload[196]=filter.valid;
     memcpy(payload+197,&filter.cutoff_hz,4);memcpy(payload+201,&filter.applied_sample_hz,4);
+    { const float target=flight.yaw_target_rad*57.295779513f,
+                  error=flight.yaw_error_rad*57.295779513f;
+      memcpy(payload+205,&target,4);memcpy(payload+209,&error,4); }
+    sbb_p32(payload+213,flight.attitude_epoch);payload[217]=flight.yaw_hold_active;
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    { const float v=1.25f;memcpy(payload+205,&v,4);sbb_p32(payload+209,0xfffffffeU);
-      sbb_p16(payload+213,(uint16_t)-32768);sbb_p16(payload+215,0);sbb_p16(payload+217,32767); }
+    { const float v=1.25f;memcpy(payload+218,&v,4);sbb_p32(payload+222,0xfffffffeU);
+      sbb_p16(payload+226,(uint16_t)-32768);sbb_p16(payload+228,0);sbb_p16(payload+230,32767); }
 #endif
 }
 #endif

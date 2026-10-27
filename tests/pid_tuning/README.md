@@ -1,5 +1,12 @@
 # 单轴内环调参
 
+低油门保护：最后有效 CH3 小于 `0x017E` 时，正常模式和单轴调参均输出四路最小油门，
+清除 PID 状态并保持解锁；抬油门恢复。规则及专项回归见 [THROTTLE_STOP.md](../../THROTTLE_STOP.md)。
+
+当前正常模式已支持 yaw 松杆捕获实际航向并保持，见 [YAW_HOLD.md](../../YAW_HOLD.md)。
+当前反馈为 BMI088 RFU：yaw 俯视逆时针为正。下文 ATOM 映射、卡尔曼参数等旧描述
+保留为历史记录，不适用于当前反馈链；单轴调参操作仍按本节执行。
+
 锁定电调后，在 Keil Watch 将 `g_flight_control_tuning.pid_debug` 设为 1。
 `active=1` 表示已经进入调参模式；设为 0 请求恢复双环，同样只在锁定时生效。
 解锁期间的模式请求会保留，到锁定后生效。上电始终默认 0。
@@ -18,7 +25,7 @@ VOFA 使用 230400、8N1、JustFloat、100 Hz；电脑端需同步设置 230400�
 Roll 符号按最新台架反馈修正：相对最初直接发送原始 IMU 的版本，CH0 为原 CH1 取负，CH1 为原 CH0，CH2 为原 CH2 取负。
 姿态角与角速度从同一次 FlightControl_GetState 快照发送；不再单独读取原始 IMU 姿态。
 Roll/Pitch 角度外环使用同一姿态状态，公式仍为 Kp × (目标角度 - 实际角度)，限幅 ±4 rad/s。
-锁定时仍计算外环目标，但不输出电机修正；Yaw 仍仅使用角速度环，不新增航向角控制。
+锁定时不输出电机修正；正常模式 yaw 打杆控制角速度、回中捕获实际航向。单轴调参绕过航向保持。
 CH3~CH6 的油门、遥控目标含义不变，CAN 解包与 g_atom_imu_data 原始字段保持不变。
 CH7/8 为 Roll 目标/实际，CH9/10 为 Pitch 目标/实际，CH11/12 为 Yaw 目标/实际，单位均为 °/s。
 CH13 为 Roll 滤波前角速度（`-gyro_y`），单位 °/s；每帧 23 个 float 加 JustFloat 帧尾，共 96 字节，CH20～22 见下文。
@@ -158,7 +165,7 @@ gravity-norm thermal fitting and equal recording weights. The real-log analysis
 uses leave-one-recording-out validation and rejects poorly repeatable accel
 thermal models; colder incomplete coverage is reported, not silently validated.
 
-Blackbox regression now checks a 205-byte payload/233-byte wire DATA packet,
+Blackbox regression now checks a 218-byte payload/246-byte wire DATA packet (including yaw hold fields),
 the added independent BMI attitude/status, capture time only in the header/CSV sample_time_us, and removal
 of the duplicate Celsius-convertible temperature counts. The calibrated BMI
 values/metadata and optical bytes are unchanged. Schema periodic recovery,

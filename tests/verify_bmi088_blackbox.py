@@ -72,6 +72,9 @@ with tempfile.TemporaryDirectory(prefix="bmi088-cross-") as directory:
                     assert row["bmi088_gyro_filter_valid"] == "1"
                     assert float(row["bmi088_gyro_filter_cutoff_hz"]) == 50
                     assert float(row["bmi088_gyro_filter_sample_hz"]) == 2000
+                    assert float(row["yaw_target_deg"]) == f32(f32(.6) * f32(57.295779513))
+                    assert float(row["yaw_error_deg"]) == f32(f32(.1) * f32(57.295779513))
+                    assert row["flight_attitude_epoch"] == "6" and row["yaw_hold_active"] == "1"
                     if extra:
                         assert row["new_float"] == "1.25" and row["new_uint32"] == "4294967294"
                         assert [row[f"new_array[{i}]"] for i in range(3)] == ["-32768", "0", "32767"]

@@ -36,6 +36,7 @@ typedef struct
     uint8_t failsafe;
     uint8_t ch17;
     uint8_t ch18;
+    uint16_t accepted_throttle_raw; /* CH3 from the last GOOD frame, not lost-frame diagnostics. */
 } RcSbusData_t;
 
 extern volatile RcSbusData_t g_rc_sbus_data;

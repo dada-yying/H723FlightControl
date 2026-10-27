@@ -109,8 +109,9 @@ static void RcSbus_PublishSafe(void)
 {
     taskENTER_CRITICAL();
     g_rc_sbus_data.throttle = 0.0f;
-    g_rc_sbus_data.roll_target_rad = 0.0f;
-    g_rc_sbus_data.pitch_target_rad = 0.0f;
+    g_rc_sbus_data.accepted_throttle_raw = 0U;
+    g_rc_sbus_data.roll_target_rad = 0.01291544f;
+    g_rc_sbus_data.pitch_target_rad = 0.01780236f;
     g_rc_sbus_data.yaw_rate_target_rad_s = 0.0f;
     g_rc_sbus_data.valid = 0U;
     g_rc_sbus_data.tuning_rate_rad_s = 0.0f;
@@ -151,6 +152,7 @@ static void RcSbus_ProcessFrame(const uint8_t frame[RC_SBUS_FRAME_SIZE])
     /* AETR: CH1=roll, CH2=pitch, CH3=throttle, CH4=yaw.
      * Measured right-roll/right-yaw increase raw values; forward-pitch decreases.
      * RFU targets: CH1 -> +pitch, CH2 forward -> -roll, CH4 right -> -yaw. */
+    g_rc_sbus_data.accepted_throttle_raw = g_rc_sbus_data.channel[2];
     g_rc_sbus_data.throttle = RcSbus_MapThrottle(g_rc_sbus_data.channel[2]);
     g_rc_sbus_data.pitch_target_rad = RC_SBUS_ROLL_TARGET_SIGN *
         RcSbus_MapCentered(g_rc_sbus_data.channel[0], RC_SBUS_ROLL_MIN,
