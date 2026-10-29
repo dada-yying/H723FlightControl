@@ -7,7 +7,7 @@ try {
     $crossDir = Join-Path $PSScriptRoot '../../../STM32F407VET6黑匣子/tests/build'
     New-Item -ItemType Directory -Path $crossDir -Force | Out-Null
     $crossFile = Join-Path (Resolve-Path $crossDir) 'h723_wire.bin'
-    foreach ($testName in @('test_tuning', 'test_throttle_stop', 'test_yaw_hold', 'test_notch', 'test_vofa_esc', 'test_blackbox', 'test_blackbox_schedule', 'test_optical_flow', 'test_optical_diag', 'test_bmi088', 'test_bmi088_gyro_filter', 'test_bmi088_filter_response', 'test_bmi088_heater', 'test_bmi088_attitude')) {
+    foreach ($testName in @('test_tuning', 'test_throttle_stop', 'test_yaw_hold', 'test_notch', 'test_vofa_esc', 'test_blackbox', 'test_blackbox_schedule', 'test_optical_flow', 'test_optical_diag', 'test_optical_filter', 'test_bmi088', 'test_bmi088_gyro_filter', 'test_bmi088_filter_response', 'test_bmi088_heater', 'test_bmi088_attitude')) {
         $fixture = if ($testName -eq 'test_blackbox') { Join-Path (Resolve-Path $crossDir) 'h723_v3_wire.bin' } elseif ($testName -eq 'test_bmi088_filter_response') { Join-Path $testOutput 'bmi088-filter-response.csv' } else { $crossFile }
         $compileCommand = '"{0}" >nul && cl /nologo /TC /std:c11 /D_CRT_SECURE_NO_WARNINGS /I tests\pid_tuning\stubs tests\pid_tuning\{2}.c /Fo:"{1}\{2}.o" /Fe:"{1}\{2}.exe" && "{1}\{2}.exe" "{3}"' -f $VcVars, $testOutput, $testName, $fixture
         & cmd /d /s /c $compileCommand

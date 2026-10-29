@@ -22,6 +22,23 @@ int BlackboxStorage_Enqueue(const uint8_t *p,uint16_t n,uint64_t us){
 }
 static void advance(unsigned us){test_dwt.CYCCNT+=us*480U;test_tick+=us/1000U;}
 static unsigned s_test_elapsed_us;
+static uint32_t s_optical_fixture_count, s_optical_fixture_tick;
+static void seed_optical(void)
+{
+    uint8_t p[27] = {0xef,1,1,0x51,0,20};
+    uint32_t sensor_time = s_optical_fixture_count * 10U;
+    unsigned i;
+    if (s_optical_fixture_count && (uint32_t)(test_tick-s_optical_fixture_tick) < 10U) return;
+    p[4] = (uint8_t)s_optical_fixture_count;
+    for (i=0;i<4;i++) p[6+i]=(uint8_t)(sensor_time>>(8*i));
+    p[10]=250; p[14]=255; p[16]=1;
+    p[18]=100; p[20]=0x38; p[21]=0xff; /* 100, -200 cm/s at 1 m. */
+    p[22]=100; p[23]=1;
+    for (i=0;i<26;i++) p[26]=(uint8_t)(p[26]+p[i]);
+    /* Use the production parser/publication, including raw/derived coherence. */
+    for (i=0;i<27;i++) OF_Byte(p[i],test_tick);
+    s_optical_fixture_tick=test_tick; s_optical_fixture_count++;
+}
 static void timer_step(void){
     unsigned period=htim4.active_autoreload+1U;
     test_dwt.CYCCNT+=period*480U;
@@ -38,12 +55,15 @@ static void reset(void){
     test_dma_status=test_abort_status=HAL_OK;test_abort_immediate=0;test_clean_hook=NULL;test_scb.CCR=SCB_CCR_DC_Msk;
     test_timer_init_status=test_timer_start_status=test_timer_event_status=HAL_OK;s_test_elapsed_us=0;
     RcSbus_Init();FlightControl_Init();assert(EscPwm_Init()==HAL_OK);OpticalFlow_Init(HAL_OK);Bmi088_Init(HAL_ERROR);Blackbox_Init(HAL_OK);
+    s_optical_fixture_count=s_optical_fixture_tick=0;
+    OpticalFlow_ProcessPending();
     Blackbox_Service();
     assert(Blackbox_StartRecording((TaskHandle_t)0x700)==HAL_OK);
 }
 static void seed_bmi(void){
     unsigned axis;
     Bmi088Data_t sample;
+    seed_optical();
     for(axis=0;axis<3;axis++) {
         g_bmi088_data.gyro_rad_s[axis]=(axis==0?-32768:axis==1?1234:32767)*BMI088_GYRO_SCALE;
         g_bmi088_data.accel_m_s2[axis]=(axis==0?1000:axis==1?-2000:8192)*BMI088_ACCEL_SCALE;
@@ -93,7 +113,7 @@ int main(int argc,char **argv){
     Blackbox_Sample(held);
     assert(sbb_u32(held+148)==UINT32_MAX && !held[152] && !held[153]);
 #ifndef BLACKBOX_TEST_EXTRA_FIELDS
-    assert(s_payload_size==218 && test_dma_size==246 && g_blackbox_tx_stats.effective_hz==1000);
+    assert(s_payload_size==273 && test_dma_size==301 && g_blackbox_tx_stats.effective_hz==1000);
 #endif
     assert(!memcmp(expected,test_dma_source+24,80) && test_uart_size==96);
     for(i=0;i<4;i++){float motor;memcpy(&motor,test_dma_source+24+64+4*i,4);assert(motor==0);}
@@ -107,11 +127,20 @@ int main(int argc,char **argv){
       memcpy(&value,held+209,4);assert(value==.1f*57.295779513f);
       assert(sbb_u32(held+213)==6 && held[217]==1);
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-      assert(s_payload_size==232);
-      memcpy(&value,held+218,4);assert(value==1.25f);
-      assert(sbb_u32(held+222)==0xfffffffeU && sbb_u16(held+226)==32768U &&
-          sbb_u16(held+228)==0 && sbb_u16(held+230)==32767U);
+      assert(s_payload_size==287);
+      memcpy(&value,held+273,4);assert(value==1.25f);
+      assert(sbb_u32(held+277)==0xfffffffeU && sbb_u16(held+281)==32768U &&
+          sbb_u16(held+283)==0 && sbb_u16(held+285)==32767U);
 #endif
+    }
+    { OpticalFlowData_t raw; OpticalFlowEstimate_t estimate; float value;
+      OpticalFlow_GetSnapshot(&raw,&estimate);
+      assert(!memcmp(held+80,raw.raw,27));
+      assert(sbb_u32(held+258)==raw.rx_count && sbb_u32(held+262)==estimate.update_count);
+      memcpy(&value,held+218,4);assert(value==estimate.flow_x_filtered);
+      memcpy(&value,held+242,4);assert(value==estimate.velocity_x_filtered_m_s);
+      assert(sbb_u32(held+250)==estimate.age_ms && held[270]==estimate.valid);
+      assert(sbb_u16(held+268)==estimate.flags && held[271]==estimate.range_valid);
     }
     { Bmi088Data_t before=g_bmi088_data;
       Bmi088Data_t after;

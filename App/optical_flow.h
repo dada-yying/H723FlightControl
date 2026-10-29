@@ -14,6 +14,38 @@ typedef struct {
     uint8_t flow_quality, flow_status, checksum, has_sample;
     uint8_t raw[OPTICAL_FLOW_FRAME_SIZE];
 } OpticalFlowData_t;
+
+/* Observation only, in the module's unverified X/Y axes. No gyro compensation
+ * or world-frame transform; velocity is 0.01 * flow * accepted slant range. */
+#define OPTICAL_FLOW_FILTER_SAMPLE_MS 10U
+#define OPTICAL_FLOW_FILTER_FRESH_MS 30U
+#define OPTICAL_FLOW_FILTER_RESET_MS 50U
+#define OPTICAL_FLOW_FILTER_READY_FRAMES 3U
+#define OPTICAL_FLOW_RANGE_MIN_MM 80U
+#define OPTICAL_FLOW_RANGE_MAX_MM 8000U
+#define OPTICAL_FLOW_RANGE_TOLERANCE_M 0.05f
+#define OPTICAL_FLOW_RANGE_MAX_SLEW_M_S 2.0f
+typedef enum {
+    OF_FILTER_NO_SAMPLE = 1U << 0,
+    OF_FILTER_STALE = 1U << 1,
+    OF_FILTER_TOF_STATUS = 1U << 2,
+    OF_FILTER_RANGE_BOUNDS = 1U << 3,
+    OF_FILTER_RANGE_JUMP = 1U << 4,
+    OF_FILTER_FLOW_STATUS = 1U << 5,
+    OF_FILTER_TIMING = 1U << 6,
+    OF_FILTER_DUPLICATE = 1U << 7,
+    OF_FILTER_WARMUP = 1U << 8,
+    OF_FILTER_TRANSPORT = 1U << 9
+} OpticalFlowFilterFlag_t;
+typedef struct {
+    float flow_x_filtered, flow_y_filtered; /* cm/s at 1 m, not compensated. */
+    float range_accepted_m, range_innovation_m;
+    float velocity_x_m_s, velocity_y_m_s; /* Before the velocity low-pass. */
+    float velocity_x_filtered_m_s, velocity_y_filtered_m_s;
+    uint32_t age_ms, range_age_ms, rx_count, update_count;
+    uint16_t dt_ms, flags;
+    uint8_t valid, range_valid, accepted_streak;
+} OpticalFlowEstimate_t;
 typedef struct {
     uint32_t byte_count, frame_count, checksum_errors, length_errors;
     uint32_t queue_overflows, uart_errors, restart_count, restart_failures;
@@ -65,6 +97,9 @@ void OpticalFlow_SetTaskHandle(TaskHandle_t handle);
 HAL_StatusTypeDef OpticalFlow_Start(void);
 void OpticalFlow_ProcessPending(void);
 void OpticalFlow_GetData(OpticalFlowData_t *data);
+/* Raw and derived data belong to the same published frame. Getters never step
+ * the filters, including when BlackboxTask samples at 1 kHz. */
+void OpticalFlow_GetSnapshot(OpticalFlowData_t *data, OpticalFlowEstimate_t *estimate);
 void OpticalFlow_OnRxEvent(UART_HandleTypeDef *uart);
 void OpticalFlow_OnRxByte(UART_HandleTypeDef *uart);
 void OpticalFlow_OnError(UART_HandleTypeDef *uart);

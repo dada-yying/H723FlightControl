@@ -165,11 +165,20 @@ gravity-norm thermal fitting and equal recording weights. The real-log analysis
 uses leave-one-recording-out validation and rejects poorly repeatable accel
 thermal models; colder incomplete coverage is reported, not silently validated.
 
-Blackbox regression now checks a 218-byte payload/246-byte wire DATA packet (including yaw hold fields),
+Blackbox regression now checks a 273-byte payload/301-byte wire DATA packet (including yaw hold and optical filter fields),
 the added independent BMI attitude/status, capture time only in the header/CSV sample_time_us, and removal
 of the duplicate Celsius-convertible temperature counts. The calibrated BMI
 values/metadata and optical bytes are unchanged. Schema periodic recovery,
 low-rate sensor snapshot repetition, VOFA layout and all safety logic remain.
+
+`test_optical_filter.c` exercises the production UART parser and task filter:
+100 Hz new frames, 5 Hz frequency response, exact first-value initialization,
+distance innovation rejection, zero/duplicate input, stale output, missing frames,
+clock wrap and transport recovery. Run `tests/run_optical_filter.ps1` independently
+of unrelated controller assertions. Optional `-ReplayDirectory` replays the report's
+five decoded logs through the C implementation and compares with SciPy.
+`tests/run_sd.ps1` checks raw/filtered optical coherence through FatFs and the
+unchanged CSV converter. See `OPTICAL_FLOW_FILTER.md` for units and flags.
 
 `test_bmi088_attitude.c` executes the pinned MIT x-io Fusion code, production
 adapter and real SPI publisher. It checks gravity/6-face/non-level/inverted

@@ -58,8 +58,26 @@ static const BlackboxField s_fields[] = {
     BF("yaw_error_deg","deg",209,1,SBB_F32),
     BF("flight_attitude_epoch","",213,1,SBB_U32),
     BF("yaw_hold_active","",217,1,SBB_U8),
+    /* Uncompensated module axes, observation only. Raw region 80..111 stays exact. */
+    BF("of_flow_x_filtered","cm/s@1m",218,1,SBB_F32),
+    BF("of_flow_y_filtered","cm/s@1m",222,1,SBB_F32),
+    BF("of_range_accepted_m","m",226,1,SBB_F32),
+    BF("of_range_innovation_m","m",230,1,SBB_F32),
+    BF("of_velocity_x_uncomp_m_s","m/s",234,1,SBB_F32),
+    BF("of_velocity_y_uncomp_m_s","m/s",238,1,SBB_F32),
+    BF("of_velocity_x_filtered_m_s","m/s",242,1,SBB_F32),
+    BF("of_velocity_y_filtered_m_s","m/s",246,1,SBB_F32),
+    BF("of_filter_age_ms","ms",250,1,SBB_U32),
+    BF("of_range_age_ms","ms",254,1,SBB_U32),
+    BF("of_filter_rx_count","",258,1,SBB_U32),
+    BF("of_filter_update_count","",262,1,SBB_U32),
+    BF("of_filter_dt_ms","ms",266,1,SBB_U16),
+    BF("of_filter_flags","bitmask",268,1,SBB_U16),
+    BF("of_filter_valid","",270,1,SBB_U8),
+    BF("of_range_valid","",271,1,SBB_U8),
+    BF("of_filter_accepted_streak","frame",272,1,SBB_U8),
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    BF("new_float","test",218,1,SBB_F32), BF("new_uint32","test",222,1,SBB_U32), BF("new_array","test",226,3,SBB_I16),
+    BF("new_float","test",273,1,SBB_F32), BF("new_uint32","test",277,1,SBB_U32), BF("new_array","test",281,3,SBB_I16),
 #endif
 };
 #undef BF
@@ -94,7 +112,9 @@ static void Blackbox_Sample(uint8_t *payload)
     static Bmi088Data_t bmi;
     static Bmi088AttitudeState_t attitude;
     static Bmi088GyroFilterState_t filter;
-    FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);OpticalFlow_GetData(&optical);
+    static OpticalFlowEstimate_t optical_estimate;
+    FlightControl_GetState(&flight);RcSbus_GetData(&rc);EscPwm_GetState(&esc);
+    OpticalFlow_GetSnapshot(&optical, &optical_estimate);
     Bmi088_GetSnapshotWithFilter(&bmi, &filter, &attitude);
     memset(payload,0,s_payload_size);
     /* Existing builder supplies the unchanged base and exact optical bytes.
@@ -132,9 +152,22 @@ static void Blackbox_Sample(uint8_t *payload)
                   error=flight.yaw_error_rad*57.295779513f;
       memcpy(payload+205,&target,4);memcpy(payload+209,&error,4); }
     sbb_p32(payload+213,flight.attitude_epoch);payload[217]=flight.yaw_hold_active;
+    memcpy(payload+218,&optical_estimate.flow_x_filtered,4);
+    memcpy(payload+222,&optical_estimate.flow_y_filtered,4);
+    memcpy(payload+226,&optical_estimate.range_accepted_m,4);
+    memcpy(payload+230,&optical_estimate.range_innovation_m,4);
+    memcpy(payload+234,&optical_estimate.velocity_x_m_s,4);
+    memcpy(payload+238,&optical_estimate.velocity_y_m_s,4);
+    memcpy(payload+242,&optical_estimate.velocity_x_filtered_m_s,4);
+    memcpy(payload+246,&optical_estimate.velocity_y_filtered_m_s,4);
+    sbb_p32(payload+250,optical_estimate.age_ms);sbb_p32(payload+254,optical_estimate.range_age_ms);
+    sbb_p32(payload+258,optical_estimate.rx_count);sbb_p32(payload+262,optical_estimate.update_count);
+    sbb_p16(payload+266,optical_estimate.dt_ms);sbb_p16(payload+268,optical_estimate.flags);
+    payload[270]=optical_estimate.valid;payload[271]=optical_estimate.range_valid;
+    payload[272]=optical_estimate.accepted_streak;
 #ifdef BLACKBOX_TEST_EXTRA_FIELDS
-    { const float v=1.25f;memcpy(payload+218,&v,4);sbb_p32(payload+222,0xfffffffeU);
-      sbb_p16(payload+226,(uint16_t)-32768);sbb_p16(payload+228,0);sbb_p16(payload+230,32767); }
+    { const float v=1.25f;memcpy(payload+273,&v,4);sbb_p32(payload+277,0xfffffffeU);
+      sbb_p16(payload+281,(uint16_t)-32768);sbb_p16(payload+283,0);sbb_p16(payload+285,32767); }
 #endif
 }
 #endif
